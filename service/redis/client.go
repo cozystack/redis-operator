@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	rediscli "github.com/go-redis/redis/v8"
+	rediscli "github.com/redis/go-redis/v9"
 	"github.com/spotahome/redis-operator/log"
 	"github.com/spotahome/redis-operator/metrics"
 )
