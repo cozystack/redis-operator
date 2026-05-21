@@ -37,6 +37,13 @@ func (w *RedisFailoverHandler) Ensure(rf *redisfailoverv1.RedisFailover, labels 
 		return err
 	}
 
+	// TLS Certificate must exist before the pods are created so the Secret
+	// the pods mount is populated. EnsureRedisCertificate is a no-op when
+	// TLS is disabled or the user supplied their own Secret.
+	if err := w.rfService.EnsureRedisCertificate(rf, labels, or); err != nil {
+		return err
+	}
+
 	if err := w.rfService.EnsureRedisShutdownConfigMap(rf, labels, or); err != nil {
 		return err
 	}

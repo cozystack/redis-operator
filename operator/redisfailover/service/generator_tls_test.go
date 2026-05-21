@@ -3,12 +3,15 @@ package service_test
 import (
 	"strings"
 	"testing"
+	"time"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	redisfailoverv1 "github.com/spotahome/redis-operator/api/redisfailover/v1"
 	"github.com/spotahome/redis-operator/log"
@@ -360,3 +363,85 @@ func envToMap(env []corev1.EnvVar) map[string]string {
 	return out
 }
 
+func TestEnsureRedisCertificateCreatesCertManagerCert(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	rf.Spec.TLS.CertManager.Duration = &metav1.Duration{Duration: 30 * 24 * time.Hour}
+	rf.Spec.TLS.CertManager.RenewBefore = &metav1.Duration{Duration: 10 * 24 * time.Hour}
+
+	var got *cmapi.Certificate
+	ms := &mK8SService.Services{}
+	ms.On("CreateOrUpdateCertificate", rf.Namespace, mock.MatchedBy(func(c *cmapi.Certificate) bool {
+		got = c
+		return true
+	})).Return(nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+	a.Equal(rfservice.GetTLSCertificateName(rf), got.Name)
+	a.Equal(rf.Namespace, got.Namespace)
+	a.Equal(rfservice.GetTLSSecretName(rf), got.Spec.SecretName)
+	a.Equal("test-ca", got.Spec.IssuerRef.Name)
+	a.Equal("Issuer", got.Spec.IssuerRef.Kind)
+	a.Equal("cert-manager.io", got.Spec.IssuerRef.Group)
+	a.Equal(rf.Spec.TLS.CertManager.Duration, got.Spec.Duration)
+	a.Equal(rf.Spec.TLS.CertManager.RenewBefore, got.Spec.RenewBefore)
+
+	// DNS SAN coverage: each Service must appear in short and FQDN form, plus the
+	// per-pod wildcard for the headless service.
+	dnsSet := make(map[string]struct{}, len(got.Spec.DNSNames))
+	for _, d := range got.Spec.DNSNames {
+		dnsSet[d] = struct{}{}
+	}
+	for _, want := range []string{
+		rfservice.GetRedisName(rf),
+		rfservice.GetRedisMasterName(rf) + "." + rf.Namespace + ".svc.cluster.local",
+		rfservice.GetSentinelName(rf) + "." + rf.Namespace + ".svc",
+		"*." + rfservice.GetRedisName(rf) + "." + rf.Namespace + ".svc.cluster.local",
+	} {
+		_, ok := dnsSet[want]
+		a.Truef(ok, "expected DNS SAN %q to be present (got %v)", want, got.Spec.DNSNames)
+	}
+
+	// Usages must include both server and client auth so the cert works for
+	// the cluster pods AND the operator client.
+	usages := make(map[cmapi.KeyUsage]struct{}, len(got.Spec.Usages))
+	for _, u := range got.Spec.Usages {
+		usages[u] = struct{}{}
+	}
+	_, hasServer := usages[cmapi.UsageServerAuth]
+	_, hasClient := usages[cmapi.UsageClientAuth]
+	a.True(hasServer, "Certificate must declare server auth usage")
+	a.True(hasClient, "Certificate must declare client auth usage")
+}
+
+func TestEnsureRedisCertificateSkipsForBYOSecret(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	rf.Spec.TLS.CertManager = nil
+	rf.Spec.TLS.CertificateSecret = &redisfailoverv1.LocalSecretReference{SecretName: "byo-tls"}
+
+	ms := &mK8SService.Services{}
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+
+	a.NoError(gen.EnsureRedisCertificate(rf, nil, nil))
+	ms.AssertNotCalled(t, "CreateOrUpdateCertificate", mock.Anything, mock.Anything)
+}
+
+func TestEnsureRedisCertificateSkipsWhenDisabled(t *testing.T) {
+	a := assert.New(t)
+	rf := generateRF() // TLS = nil
+
+	ms := &mK8SService.Services{}
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+
+	a.NoError(gen.EnsureRedisCertificate(rf, nil, nil))
+	ms.AssertNotCalled(t, "CreateOrUpdateCertificate", mock.Anything, mock.Anything)
+}
+
+// unused, but force-keep imports if they get trimmed when tests above are removed
+var _ = cmmeta.IssuerReference{}

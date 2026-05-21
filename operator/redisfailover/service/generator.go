@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/template"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -84,6 +85,90 @@ func redisCLITLSFlags(rf *redisfailoverv1.RedisFailover) string {
 		return ""
 	}
 	return fmt.Sprintf("--tls --cert %s --key %s --cacert %s ", tlsCertFile, tlsKeyFile, tlsCAFile)
+}
+
+// generateRedisCertificate builds the cert-manager Certificate that
+// covers all Redis and Sentinel endpoints of the failover.
+//
+// SAN coverage:
+//   - the four Service DNS names (redis headless, redis master,
+//     redis slave, sentinel) in short, namespaced and FQDN form
+//   - the per-pod DNS records of the redis headless service so the
+//     operator can dial pods by stable name with TLS verification on
+//
+// IP SANs are deliberately omitted: pod IPs are unstable, and the
+// operator uses ServerName override in tls.Config to validate
+// pod-IP-targeted dials against the headless DNS SAN instead.
+func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) *cmapi.Certificate {
+	name := GetTLSCertificateName(rf)
+	secretName := GetTLSSecretName(rf)
+	cm := rf.Spec.TLS.CertManager
+
+	dnsNames := redisCertificateDNSNames(rf)
+
+	cert := &cmapi.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       rf.Namespace,
+			Labels:          labels,
+			OwnerReferences: ownerRefs,
+		},
+		Spec: cmapi.CertificateSpec{
+			SecretName: secretName,
+			IssuerRef:  cm.IssuerRef,
+			DNSNames:   dnsNames,
+			Usages: []cmapi.KeyUsage{
+				cmapi.UsageDigitalSignature,
+				cmapi.UsageKeyEncipherment,
+				cmapi.UsageServerAuth,
+				cmapi.UsageClientAuth,
+			},
+		},
+	}
+	if cm.Duration != nil {
+		cert.Spec.Duration = cm.Duration
+	}
+	if cm.RenewBefore != nil {
+		cert.Spec.RenewBefore = cm.RenewBefore
+	}
+	if cm.PrivateKey != nil {
+		cert.Spec.PrivateKey = cm.PrivateKey
+	}
+	return cert
+}
+
+// redisCertificateDNSNames returns the SANs the Certificate must cover.
+// Each Service appears in three forms (short, namespaced, FQDN) so
+// the same certificate validates regardless of how callers resolve it.
+func redisCertificateDNSNames(rf *redisfailoverv1.RedisFailover) []string {
+	ns := rf.Namespace
+	names := []string{}
+
+	for _, svc := range []string{
+		GetRedisName(rf),
+		GetRedisMasterName(rf),
+		GetRedisSlaveName(rf),
+		GetSentinelName(rf),
+	} {
+		names = append(names,
+			svc,
+			fmt.Sprintf("%s.%s", svc, ns),
+			fmt.Sprintf("%s.%s.svc", svc, ns),
+			fmt.Sprintf("%s.%s.svc.cluster.local", svc, ns),
+		)
+	}
+
+	// Headless service has per-pod DNS records: <pod>.<headless>.<ns>.svc.cluster.local
+	// We don't know pod count up front; cover the wildcard so any
+	// replica resolves correctly.
+	headless := GetRedisName(rf)
+	names = append(names,
+		fmt.Sprintf("*.%s", headless),
+		fmt.Sprintf("*.%s.%s", headless, ns),
+		fmt.Sprintf("*.%s.%s.svc", headless, ns),
+		fmt.Sprintf("*.%s.%s.svc.cluster.local", headless, ns),
+	)
+	return names
 }
 
 func generateSentinelService(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) *corev1.Service {

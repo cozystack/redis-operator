@@ -25,6 +25,7 @@ type RedisFailoverClient interface {
 	EnsureRedisReadinessConfigMap(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 	EnsureRedisConfigMap(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 	EnsureNotPresentRedisService(rFailover *redisfailoverv1.RedisFailover) error
+	EnsureRedisCertificate(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 }
 
 // RedisFailoverKubeClient implements the required methods to talk with kubernetes
@@ -146,6 +147,19 @@ func (r *RedisFailoverKubeClient) EnsureRedisReadinessConfigMap(rf *redisfailove
 	cm := generateRedisReadinessConfigMap(rf, labels, ownerRefs)
 	err := r.K8SService.CreateOrUpdateConfigMap(rf.Namespace, cm)
 	r.setEnsureOperationMetrics(cm.Namespace, cm.Name, "ConfigMap", rf.Name, err)
+	return err
+}
+
+// EnsureRedisCertificate ensures the cert-manager Certificate resource
+// exists when spec.tls.certManager is configured. It is a no-op for any
+// other TLS mode (disabled, or bring-your-own-secret).
+func (r *RedisFailoverKubeClient) EnsureRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error {
+	if !TLSEnabled(rf) || rf.Spec.TLS.CertManager == nil {
+		return nil
+	}
+	cert := generateRedisCertificate(rf, labels, ownerRefs)
+	err := r.K8SService.CreateOrUpdateCertificate(rf.Namespace, cert)
+	r.setEnsureOperationMetrics(cert.Namespace, cert.Name, "Certificate", rf.Name, err)
 	return err
 }
 
