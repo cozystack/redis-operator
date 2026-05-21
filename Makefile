@@ -69,7 +69,7 @@ docker-build: deps-development
 		--build-arg uid=$(UID) \
 		-t $(REPOSITORY)-dev:latest \
 		-t $(REPOSITORY)-dev:$(COMMIT) \
-		-f $(DEV_DIR)/Dockerfile \
+		-f $(DEV_DIR)/Containerfile \
 		.
 
 # Run a shell into the development docker image
@@ -95,7 +95,7 @@ image: deps-development
 	-t $(REPOSITORY):latest \
 	-t $(REPOSITORY):$(COMMIT) \
 	-t $(REPOSITORY):$(BRANCH) \
-	-f $(APP_DIR)/Dockerfile \
+	-f $(APP_DIR)/Containerfile \
 	.
 
 .PHONY: image-release
@@ -107,7 +107,7 @@ image-release:
 	-t $(REPOSITORY):latest \
 	-t $(REPOSITORY):$(COMMIT) \
 	-t $(REPOSITORY):$(TAG) \
-	-f $(APP_DIR)/Dockerfile \
+	-f $(APP_DIR)/Containerfile \
 	.
 
 .PHONY: testing
