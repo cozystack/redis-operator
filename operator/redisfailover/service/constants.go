@@ -25,8 +25,25 @@ const (
 	redisShutdownName      = "r-s"
 	redisReadinessName     = "r-readiness"
 	redisRoleName          = "redis"
+	tlsCertificateName     = "tls"
 	appLabel               = "redis-failover"
 	hostnameTopologyKey    = "kubernetes.io/hostname"
+)
+
+// TLS volume / file layout.
+//
+// cert-manager produces a Secret with three well-known keys (tls.crt,
+// tls.key, ca.crt). The operator mounts that Secret read-only into every
+// Redis and Sentinel pod at tlsMountPath. The probe scripts, redis.conf
+// and sentinel.conf reference the same paths.
+const (
+	tlsVolumeName  = "redis-tls"
+	tlsMountPath   = "/tls"
+	tlsCertFile    = tlsMountPath + "/tls.crt"
+	tlsKeyFile     = tlsMountPath + "/tls.key"
+	tlsCAFile      = tlsMountPath + "/ca.crt"
+	tlsSecretKey   = "tls.crt"
+	tlsSecretCAKey = "ca.crt"
 )
 
 const (
