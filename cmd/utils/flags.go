@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/spotahome/redis-operator/operator/redisfailover"
 	"k8s.io/client-go/util/homedir"
+
+	"github.com/spotahome/redis-operator/operator/redisfailover"
 )
 
 // CMDFlags are the flags used by the cmd

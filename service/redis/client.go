@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	rediscli "github.com/redis/go-redis/v9"
+
 	"github.com/spotahome/redis-operator/log"
 	"github.com/spotahome/redis-operator/metrics"
 )
@@ -75,10 +76,10 @@ var (
 // GetNumberSentinelsInMemory return the number of sentinels that the requested sentinel has
 func (c *client) GetNumberSentinelsInMemory(ip string, tlsConfig *tls.Config) (int32, error) {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -108,10 +109,10 @@ func (c *client) GetNumberSentinelsInMemory(ip string, tlsConfig *tls.Config) (i
 // GetNumberSentinelsInMemory return the number of sentinels that the requested sentinel has
 func (c *client) GetNumberSentinelSlavesInMemory(ip string, tlsConfig *tls.Config) (int32, error) {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -149,10 +150,10 @@ func isSentinelReady(info string) error {
 // ResetSentinel sends a sentinel reset * for the given sentinel
 func (c *client) ResetSentinel(ip string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -175,10 +176,10 @@ func (c *client) ResetSentinel(ip string, tlsConfig *tls.Config) error {
 func (c *client) GetSlaveOf(ip, port, password string, tlsConfig *tls.Config) (string, error) {
 
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, port),
-		Password: password,
+		Addr:      net.JoinHostPort(ip, port),
+		Password:  password,
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -199,10 +200,10 @@ func (c *client) GetSlaveOf(ip, port, password string, tlsConfig *tls.Config) (s
 
 func (c *client) IsMaster(ip, port, password string, tlsConfig *tls.Config) (bool, error) {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, port),
-		Password: password,
+		Addr:      net.JoinHostPort(ip, port),
+		Password:  password,
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -221,10 +222,10 @@ func (c *client) MonitorRedis(ip, monitor, quorum, password string, tlsConfig *t
 
 func (c *client) MonitorRedisWithPort(ip, monitor, port, quorum, password string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -262,10 +263,10 @@ func (c *client) MonitorRedisWithPort(ip, monitor, port, quorum, password string
 
 func (c *client) MakeMaster(ip string, port string, password string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, port),
-		Password: password,
+		Addr:      net.JoinHostPort(ip, port),
+		Password:  password,
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -283,10 +284,10 @@ func (c *client) MakeSlaveOf(ip, masterIP, password string, tlsConfig *tls.Confi
 
 func (c *client) MakeSlaveOfWithPort(ip, masterIP, masterPort, password string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, masterPort), // this is IP and Port for the RedisFailover redis
-		Password: password,
+		Addr:      net.JoinHostPort(ip, masterPort), // this is IP and Port for the RedisFailover redis
+		Password:  password,
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -300,10 +301,10 @@ func (c *client) MakeSlaveOfWithPort(ip, masterIP, masterPort, password string, 
 
 func (c *client) GetSentinelMonitor(ip string, tlsConfig *tls.Config) (string, string, error) {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -326,10 +327,10 @@ func (c *client) GetSentinelMonitor(ip string, tlsConfig *tls.Config) (string, s
 
 func (c *client) SetCustomSentinelConfig(ip string, configs []string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -349,10 +350,10 @@ func (c *client) SetCustomSentinelConfig(ip string, configs []string, tlsConfig 
 func (c *client) SentinelCheckQuorum(ip string, tlsConfig *tls.Config) error {
 
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, sentinelPort),
-		Password: "",
+		Addr:      net.JoinHostPort(ip, sentinelPort),
+		Password:  "",
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewSentinelClient(options)
 	defer rClient.Close()
@@ -390,10 +391,10 @@ func (c *client) SentinelCheckQuorum(ip string, tlsConfig *tls.Config) error {
 }
 func (c *client) SetCustomRedisConfig(ip string, port string, configs []string, password string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, port),
-		Password: password,
+		Addr:      net.JoinHostPort(ip, port),
+		Password:  password,
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
@@ -449,10 +450,10 @@ func (c *client) getConfigParameters(config string) (parameter string, value str
 
 func (c *client) SlaveIsReady(ip, port, password string, tlsConfig *tls.Config) (bool, error) {
 	options := &rediscli.Options{
-		Addr:     net.JoinHostPort(ip, port),
-		Password: password,
+		Addr:      net.JoinHostPort(ip, port),
+		Password:  password,
 		DB:        0,
-		TLSConfig:  tlsConfig,
+		TLSConfig: tlsConfig,
 	}
 	rClient := rediscli.NewClient(options)
 	defer rClient.Close()
