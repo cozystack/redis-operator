@@ -195,8 +195,7 @@ update-codegen:
 		--workdir /go/src/$(PROJECT_PACKAGE) \
 		$(CODEGEN_IMAGE) \
 		--apis-in=./api \
-		--go-gen-out=./client/k8s \
-		--client-package="$(PROJECT_PACKAGE)/client/k8s"
+		--go-gen-out=./client/k8s
 
 # Generate the CRD manifest from the +kubebuilder markers in ./api.
 .PHONY: generate-crd
