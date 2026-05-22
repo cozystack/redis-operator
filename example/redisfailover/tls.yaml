@@ -47,3 +47,12 @@ spec:
       # privateKey:
       #   algorithm: ECDSA
       #   size: 256
+      # Extra Subject Alternative Names appended to the default service
+      # and per-pod SANs the operator computes. Entries that parse as
+      # an IPv4 or IPv6 address are added as IP SANs; everything else
+      # is added as a DNS SAN. Typical uses: an external LoadBalancer
+      # hostname or VIP that clients outside the cluster connect to.
+      # extraSANs:
+      #   - redis.example.com
+      #   - 10.0.0.50
+      #   - 2001:db8::1

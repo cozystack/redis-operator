@@ -1,6 +1,6 @@
 module github.com/spotahome/redis-operator
 
-go 1.26.0
+go 1.26.3
 
 require (
 	github.com/cert-manager/cert-manager v1.20.2

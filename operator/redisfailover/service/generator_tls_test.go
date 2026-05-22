@@ -419,6 +419,88 @@ func TestEnsureRedisCertificateCreatesCertManagerCert(t *testing.T) {
 	a.True(hasClient, "Certificate must declare client auth usage")
 }
 
+func TestEnsureRedisCertificateAppendsExtraSANs(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	rf.Spec.TLS.CertManager.ExtraSANs = []string{
+		"redis.example.com",
+		"10.0.0.50",
+		"redis.internal.corp",
+		"2001:db8::1",
+	}
+
+	var got *cmapi.Certificate
+	ms := &mK8SService.Services{}
+	ms.On("CreateOrUpdateCertificate", rf.Namespace, mock.MatchedBy(func(c *cmapi.Certificate) bool {
+		got = c
+		return true
+	})).Return(nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+
+	dnsSet := make(map[string]struct{}, len(got.Spec.DNSNames))
+	for _, d := range got.Spec.DNSNames {
+		dnsSet[d] = struct{}{}
+	}
+	ipSet := make(map[string]struct{}, len(got.Spec.IPAddresses))
+	for _, ip := range got.Spec.IPAddresses {
+		ipSet[ip] = struct{}{}
+	}
+
+	// Extra DNS SANs are added to DNSNames.
+	for _, want := range []string{"redis.example.com", "redis.internal.corp"} {
+		_, ok := dnsSet[want]
+		a.Truef(ok, "expected extra DNS SAN %q to be present (got %v)", want, got.Spec.DNSNames)
+	}
+
+	// Extra IP SANs are auto-classified into IPAddresses (IPv4 + IPv6).
+	for _, want := range []string{"10.0.0.50", "2001:db8::1"} {
+		_, ok := ipSet[want]
+		a.Truef(ok, "expected extra IP SAN %q to be present (got %v)", want, got.Spec.IPAddresses)
+	}
+
+	// IP-looking entries must not leak into DNSNames.
+	for _, ip := range []string{"10.0.0.50", "2001:db8::1"} {
+		_, leaked := dnsSet[ip]
+		a.Falsef(leaked, "IP %q must not appear in DNSNames", ip)
+	}
+
+	// Computed service SANs must still be present — extras are additive.
+	for _, want := range []string{
+		rfservice.GetRedisName(rf),
+		rfservice.GetRedisMasterName(rf) + "." + rf.Namespace + ".svc.cluster.local",
+		"*." + rfservice.GetRedisName(rf) + "." + rf.Namespace + ".svc.cluster.local",
+	} {
+		_, ok := dnsSet[want]
+		a.Truef(ok, "computed DNS SAN %q must remain after extras merge (got %v)", want, got.Spec.DNSNames)
+	}
+}
+
+func TestEnsureRedisCertificateNoExtraSANsLeavesIPAddressesEmpty(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+
+	var got *cmapi.Certificate
+	ms := &mK8SService.Services{}
+	ms.On("CreateOrUpdateCertificate", rf.Namespace, mock.MatchedBy(func(c *cmapi.Certificate) bool {
+		got = c
+		return true
+	})).Return(nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+	a.Empty(got.Spec.IPAddresses, "IPAddresses must remain empty when no IP-typed extras are set")
+}
+
 func TestEnsureRedisCertificateSkipsForBYOSecret(t *testing.T) {
 	a := assert.New(t)
 	rf := generateTLSRF()

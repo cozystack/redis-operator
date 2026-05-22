@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"strings"
 	"text/template"
 
@@ -105,6 +106,14 @@ func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[stri
 	cm := rf.Spec.TLS.CertManager
 
 	dnsNames := redisCertificateDNSNames(rf)
+	var ipAddresses []string
+	for _, san := range cm.ExtraSANs {
+		if ip := net.ParseIP(san); ip != nil {
+			ipAddresses = append(ipAddresses, ip.String())
+			continue
+		}
+		dnsNames = append(dnsNames, san)
+	}
 
 	cert := &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
@@ -114,9 +123,10 @@ func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[stri
 			OwnerReferences: ownerRefs,
 		},
 		Spec: cmapi.CertificateSpec{
-			SecretName: secretName,
-			IssuerRef:  cm.IssuerRef,
-			DNSNames:   dnsNames,
+			SecretName:  secretName,
+			IssuerRef:   cm.IssuerRef,
+			DNSNames:    dnsNames,
+			IPAddresses: ipAddresses,
 			Usages: []cmapi.KeyUsage{
 				cmapi.UsageDigitalSignature,
 				cmapi.UsageKeyEncipherment,

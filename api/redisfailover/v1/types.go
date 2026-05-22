@@ -93,6 +93,15 @@ type CertManagerSettings struct {
 	// policy. Optional; cert-manager uses RSA 2048 with rotation policy
 	// "Never" when unset.
 	PrivateKey *cmapi.CertificatePrivateKey `json:"privateKey,omitempty"`
+
+	// ExtraSANs is a list of additional Subject Alternative Names to add
+	// to the generated certificate. Entries are auto-classified: values
+	// that parse as IPv4 or IPv6 addresses become IP SANs, everything
+	// else becomes a DNS SAN. Extras are appended to — never replace —
+	// the service and per-pod SANs the operator computes, so in-cluster
+	// connectivity is preserved when extras are added.
+	// +optional
+	ExtraSANs []string `json:"extraSANs,omitempty"`
 }
 
 // LocalSecretReference points at a Secret in the same namespace as the
