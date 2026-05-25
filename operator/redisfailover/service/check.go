@@ -39,7 +39,25 @@ func tlsConfigFor(s k8s.Services, rf *redisfailoverv1.RedisFailover) (*tls.Confi
 	if len(caPEM) == 0 {
 		return nil, fmt.Errorf("tls: secret %s/%s contains an empty ca.crt", rf.Namespace, secretName)
 	}
-	return redis.BuildTLSConfig(caPEM, GetRedisName(rf))
+	// When the failover runs with tls-auth-clients yes, Redis and
+	// Sentinel reject any client that does not present a certificate
+	// signed by the same CA. Load the leaf certificate and its key
+	// from the standard cert-manager secret keys so the operator's
+	// internal client can authenticate itself.
+	var certPEM, keyPEM []byte
+	if rf.Spec.TLS.AuthClients == redisfailoverv1.TLSAuthClientsYes {
+		certPEM = secret.Data["tls.crt"]
+		if len(certPEM) == 0 {
+			return nil, fmt.Errorf("tls: secret %s/%s does not contain tls.crt (required for authClients=%s)",
+				rf.Namespace, secretName, redisfailoverv1.TLSAuthClientsYes)
+		}
+		keyPEM = secret.Data["tls.key"]
+		if len(keyPEM) == 0 {
+			return nil, fmt.Errorf("tls: secret %s/%s does not contain tls.key (required for authClients=%s)",
+				rf.Namespace, secretName, redisfailoverv1.TLSAuthClientsYes)
+		}
+	}
+	return redis.BuildTLSConfig(caPEM, certPEM, keyPEM, GetRedisName(rf))
 }
 
 // RedisFailoverCheck defines the interface able to check the correct status of a redis failover
