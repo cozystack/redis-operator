@@ -100,6 +100,21 @@ func TestBuildTLSConfigRejectsMalformedClientKeyPair(t *testing.T) {
 	}
 }
 
+func TestBuildTLSConfigRejectsClientMaterialWithoutCA(t *testing.T) {
+	clientCert, clientKey := selfSignedClientPEM(t)
+
+	_, err := BuildTLSConfig(nil, clientCert, clientKey, "redis.example.com")
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "caPEM must be supplied")
+	}
+
+	// Cert-only must also error, not silently fall back to plaintext.
+	_, err = BuildTLSConfig(nil, clientCert, nil, "redis.example.com")
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "caPEM must be supplied")
+	}
+}
+
 // selfSignedCAPEM produces a freshly-minted self-signed CA certificate
 // in PEM form for use in BuildTLSConfig tests.
 func selfSignedCAPEM(t *testing.T) []byte {

@@ -27,6 +27,9 @@ import (
 // "no TLS" and dial in plaintext.
 func BuildTLSConfig(caPEM, certPEM, keyPEM []byte, serverName string) (*tls.Config, error) {
 	if len(caPEM) == 0 {
+		if len(certPEM) > 0 || len(keyPEM) > 0 {
+			return nil, errors.New("tls: caPEM must be supplied when client certPEM or keyPEM are provided")
+		}
 		return nil, nil
 	}
 	if serverName == "" {
