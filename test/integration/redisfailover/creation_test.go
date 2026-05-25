@@ -223,7 +223,11 @@ func (c *clients) testRedisMaster(t *testing.T) {
 
 	for _, pod := range redisPodList.Items {
 		ip := pod.Status.PodIP
-		if ok, _ := c.redisClient.IsMaster(ip, "6379", testPass, nil); ok {
+		ok, err := c.redisClient.IsMaster(ip, "6379", testPass, nil)
+		if !assert.NoError(err, "IsMaster probe must not fail") {
+			continue
+		}
+		if ok {
 			masters = append(masters, ip)
 		}
 	}
