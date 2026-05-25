@@ -36,6 +36,9 @@ func tlsConfigFor(s k8s.Services, rf *redisfailoverv1.RedisFailover) (*tls.Confi
 	if !ok {
 		return nil, fmt.Errorf("tls: secret %s/%s does not contain ca.crt", rf.Namespace, secretName)
 	}
+	if len(caPEM) == 0 {
+		return nil, fmt.Errorf("tls: secret %s/%s contains an empty ca.crt", rf.Namespace, secretName)
+	}
 	return redis.BuildTLSConfig(caPEM, GetRedisName(rf))
 }
 
