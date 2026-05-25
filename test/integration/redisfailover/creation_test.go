@@ -250,8 +250,15 @@ func (c *clients) testSentinelMonitoring(t *testing.T) {
 
 	for _, pod := range sentinelPodList.Items {
 		ip := pod.Status.PodIP
-		master, _, _ := c.redisClient.GetSentinelMonitor(ip, nil)
+		master, _, err := c.redisClient.GetSentinelMonitor(ip, nil)
+		if !assert.NoError(err, "GetSentinelMonitor probe must not fail") {
+			continue
+		}
 		masters = append(masters, master)
+	}
+
+	if !assert.NotEmpty(masters, "at least one Sentinel must report a monitored master") {
+		return
 	}
 
 	for _, masterIP := range masters {
