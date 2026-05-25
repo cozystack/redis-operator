@@ -33,7 +33,7 @@ type Client interface {
 	MonitorRedisWithPort(ip, monitor, port, quorum, password string, tlsConfig *tls.Config) error
 	MakeMaster(ip, port, password string, tlsConfig *tls.Config) error
 	MakeSlaveOf(ip, masterIP, password string, tlsConfig *tls.Config) error
-	MakeSlaveOfWithPort(ip, masterIP, masterPort, password string, tlsConfig *tls.Config) error
+	MakeSlaveOfWithPort(ip, localPort, masterIP, masterPort, password string, tlsConfig *tls.Config) error
 	GetSentinelMonitor(ip string, tlsConfig *tls.Config) (string, string, error)
 	SetCustomSentinelConfig(ip string, configs []string, tlsConfig *tls.Config) error
 	SetCustomRedisConfig(ip string, port string, configs []string, password string, tlsConfig *tls.Config) error
@@ -279,12 +279,17 @@ func (c *client) MakeMaster(ip string, port string, password string, tlsConfig *
 }
 
 func (c *client) MakeSlaveOf(ip, masterIP, password string, tlsConfig *tls.Config) error {
-	return c.MakeSlaveOfWithPort(ip, masterIP, redisPort, password, tlsConfig)
+	return c.MakeSlaveOfWithPort(ip, redisPort, masterIP, redisPort, password, tlsConfig)
 }
 
-func (c *client) MakeSlaveOfWithPort(ip, masterIP, masterPort, password string, tlsConfig *tls.Config) error {
+// MakeSlaveOfWithPort dials the local Redis instance at ip:localPort and
+// instructs it to replicate from masterIP:masterPort. The two ports must
+// be passed independently because external-master mode (where masterPort
+// belongs to a Redis outside the cluster) and same-cluster failover
+// (where masterPort equals localPort) both flow through this function.
+func (c *client) MakeSlaveOfWithPort(ip, localPort, masterIP, masterPort, password string, tlsConfig *tls.Config) error {
 	options := &rediscli.Options{
-		Addr:      net.JoinHostPort(ip, masterPort), // this is IP and Port for the RedisFailover redis
+		Addr:      net.JoinHostPort(ip, localPort),
 		Password:  password,
 		DB:        0,
 		TLSConfig: tlsConfig,
