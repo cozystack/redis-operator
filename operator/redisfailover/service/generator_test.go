@@ -2412,7 +2412,7 @@ func TestRedisCustomLivenessProbe(t *testing.T) {
 						Command: []string{
 							"sh",
 							"-c",
-							"redis-cli -h $(hostname) -p 6379 --user pinger --pass pingpass --no-auth-warning ping | grep PONG",
+							"redis-cli -h localhost -p 6379 --user pinger --pass pingpass --no-auth-warning ping | grep PONG",
 						},
 					},
 				},
@@ -2492,7 +2492,7 @@ func TestSentinelCustomLivenessProbe(t *testing.T) {
 						Command: []string{
 							"sh",
 							"-c",
-							"redis-cli -h $(hostname) -p 26379 ping",
+							"redis-cli -h localhost -p 26379 ping",
 						},
 					},
 				},
@@ -2638,7 +2638,7 @@ func TestSentinelCustomReadinessProbe(t *testing.T) {
 						Command: []string{
 							"sh",
 							"-c",
-							"redis-cli -h $(hostname) -p 26379 sentinel get-master-addr-by-name mymaster | head -n 1 | grep -vq '127.0.0.1'",
+							"redis-cli -h localhost -p 26379 sentinel get-master-addr-by-name mymaster | head -n 1 | grep -vq '127.0.0.1'",
 						},
 					},
 				},

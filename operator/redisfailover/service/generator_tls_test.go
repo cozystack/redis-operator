@@ -304,6 +304,10 @@ func TestRedisLivenessProbeUsesTLS(t *testing.T) {
 	cmd := strings.Join(probe.Exec.Command, " ")
 	a.Contains(cmd, "--tls")
 	a.Contains(cmd, "--cacert /tls/ca.crt")
+	a.Contains(cmd, "-h localhost",
+		"probe must dial -h localhost so the host matches a SAN entry of the in-pod TLS cert")
+	a.NotContains(cmd, "$(hostname)",
+		"$(hostname) returns the bare pod name and is not covered by the cert SAN list")
 }
 
 func TestSentinelProbeUsesTLS(t *testing.T) {
@@ -330,6 +334,10 @@ func TestSentinelProbeUsesTLS(t *testing.T) {
 	}
 	cmd := strings.Join(probe.Exec.Command, " ")
 	a.Contains(cmd, "--tls")
+	a.Contains(cmd, "-h localhost",
+		"sentinel probe must dial -h localhost so the host matches a SAN entry of the in-pod TLS cert")
+	a.NotContains(cmd, "$(hostname)",
+		"$(hostname) returns the bare pod name and is not covered by the cert SAN list")
 }
 
 func TestTLSSecretNamePrecedence(t *testing.T) {
@@ -481,7 +489,7 @@ func TestEnsureRedisCertificateAppendsExtraSANs(t *testing.T) {
 	}
 }
 
-func TestEnsureRedisCertificateNoExtraSANsLeavesIPAddressesEmpty(t *testing.T) {
+func TestEnsureRedisCertificateCoversInPodDials(t *testing.T) {
 	a := assert.New(t)
 	rf := generateTLSRF()
 
@@ -498,7 +506,53 @@ func TestEnsureRedisCertificateNoExtraSANsLeavesIPAddressesEmpty(t *testing.T) {
 	if !a.NotNil(got) {
 		return
 	}
-	a.Empty(got.Spec.IPAddresses, "IPAddresses must remain empty when no IP-typed extras are set")
+
+	dnsSet := make(map[string]struct{}, len(got.Spec.DNSNames))
+	for _, d := range got.Spec.DNSNames {
+		dnsSet[d] = struct{}{}
+	}
+	ipSet := make(map[string]struct{}, len(got.Spec.IPAddresses))
+	for _, ip := range got.Spec.IPAddresses {
+		ipSet[ip] = struct{}{}
+	}
+
+	// localhost must be a DNS SAN so the liveness probe (-h localhost)
+	// verifies against the same cert.
+	_, hasLocalhost := dnsSet["localhost"]
+	a.True(hasLocalhost, "localhost DNS SAN must be present (got %v)", got.Spec.DNSNames)
+
+	// 127.0.0.1 and ::1 must be IP SANs so the redis_exporter sidecar
+	// (REDIS_ADDR=rediss://127.0.0.1:...) and the sentinel monitor
+	// target (sentinel monitor mymaster 127.0.0.1 ...) verify against
+	// the same cert.
+	for _, ip := range []string{"127.0.0.1", "::1"} {
+		_, ok := ipSet[ip]
+		a.Truef(ok, "expected loopback IP SAN %q to be present (got %v)", ip, got.Spec.IPAddresses)
+	}
+}
+
+func TestEnsureRedisCertificateLoopbackSANsArePresentWithoutExtras(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+
+	var got *cmapi.Certificate
+	ms := &mK8SService.Services{}
+	ms.On("CreateOrUpdateCertificate", rf.Namespace, mock.MatchedBy(func(c *cmapi.Certificate) bool {
+		got = c
+		return true
+	})).Return(nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+	// Loopback IPs are part of the default SAN set; this asserts the
+	// default does not silently regress to an empty IPAddresses slice
+	// (which would break the in-pod TLS self-dials).
+	a.ElementsMatch([]string{"127.0.0.1", "::1"}, got.Spec.IPAddresses,
+		"default IPAddresses must include only the loopback IPs when no extras are set")
 }
 
 func TestEnsureRedisCertificateSkipsForBYOSecret(t *testing.T) {
