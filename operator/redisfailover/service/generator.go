@@ -103,12 +103,12 @@ func redisCLITLSFlags(rf *redisfailoverv1.RedisFailover) string {
 // Pod IPs are still not added: they are unstable, and the operator
 // uses ServerName override in tls.Config to validate pod-IP-targeted
 // dials against the headless DNS SAN instead.
-func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) *cmapi.Certificate {
+func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference, clusterDomain string) *cmapi.Certificate {
 	name := GetTLSCertificateName(rf)
 	secretName := GetTLSSecretName(rf)
 	cm := rf.Spec.TLS.CertManager
 
-	dnsNames, ipAddresses := redisCertificateSANs(rf)
+	dnsNames, ipAddresses := redisCertificateSANs(rf, clusterDomain)
 	for _, san := range cm.ExtraSANs {
 		if ip := net.ParseIP(san); ip != nil {
 			ipAddresses = append(ipAddresses, ip.String())
@@ -156,7 +156,14 @@ func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[stri
 // in-pod self-dials (liveness probes via -h localhost, the
 // redis_exporter sidecar via 127.0.0.1, the sentinel monitor target
 // 127.0.0.1) verify cleanly against the same cert.
-func redisCertificateSANs(rf *redisfailoverv1.RedisFailover) (dnsNames, ipAddresses []string) {
+//
+// clusterDomain is the cluster's DNS suffix (e.g. "cluster.local",
+// "cozy.local"). An empty value falls back to "cluster.local" so
+// existing deployments that never set --cluster-domain keep working.
+func redisCertificateSANs(rf *redisfailoverv1.RedisFailover, clusterDomain string) (dnsNames, ipAddresses []string) {
+	if clusterDomain == "" {
+		clusterDomain = "cluster.local"
+	}
 	ns := rf.Namespace
 
 	for _, svc := range []string{
@@ -169,19 +176,20 @@ func redisCertificateSANs(rf *redisfailoverv1.RedisFailover) (dnsNames, ipAddres
 			svc,
 			fmt.Sprintf("%s.%s", svc, ns),
 			fmt.Sprintf("%s.%s.svc", svc, ns),
-			fmt.Sprintf("%s.%s.svc.cluster.local", svc, ns),
+			fmt.Sprintf("%s.%s.svc.%s", svc, ns, clusterDomain),
 		)
 	}
 
-	// Headless service has per-pod DNS records: <pod>.<headless>.<ns>.svc.cluster.local
-	// We don't know pod count up front; cover the wildcard so any
-	// replica resolves correctly.
+	// Headless service has per-pod DNS records:
+	// <pod>.<headless>.<ns>.svc.<cluster-domain>. We don't know pod
+	// count up front; cover the wildcard so any replica resolves
+	// correctly.
 	headless := GetRedisName(rf)
 	dnsNames = append(dnsNames,
 		fmt.Sprintf("*.%s", headless),
 		fmt.Sprintf("*.%s.%s", headless, ns),
 		fmt.Sprintf("*.%s.%s.svc", headless, ns),
-		fmt.Sprintf("*.%s.%s.svc.cluster.local", headless, ns),
+		fmt.Sprintf("*.%s.%s.svc.%s", headless, ns, clusterDomain),
 		"localhost",
 	)
 

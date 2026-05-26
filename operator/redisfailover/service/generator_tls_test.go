@@ -63,7 +63,7 @@ func TestRedisConfigMapHasTLSDirectives(t *testing.T) {
 		return false
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisConfigMap(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -95,7 +95,7 @@ func TestSentinelConfigMapHasTLSDirectives(t *testing.T) {
 		return false
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureSentinelConfigMap(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -121,7 +121,7 @@ func TestRedisStatefulSetHasTLSVolume(t *testing.T) {
 	})).Return(nil)
 	ms.On("CreateOrUpdatePodDisruptionBudget", rf.Namespace, mock.Anything).Return(nil).Maybe()
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisStatefulset(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -169,7 +169,7 @@ func TestRedisExporterHasTLSEnv(t *testing.T) {
 	})).Return(nil)
 	ms.On("CreateOrUpdatePodDisruptionBudget", rf.Namespace, mock.Anything).Return(nil).Maybe()
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisStatefulset(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -205,7 +205,7 @@ func TestSentinelExporterTLSAddr(t *testing.T) {
 	})).Return(nil)
 	ms.On("CreateOrUpdatePodDisruptionBudget", rf.Namespace, mock.Anything).Return(nil).Maybe()
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureSentinelDeployment(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -241,7 +241,7 @@ func TestRedisShutdownScriptUsesTLS(t *testing.T) {
 		return false
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisShutdownConfigMap(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -268,7 +268,7 @@ func TestRedisReadinessScriptUsesTLS(t *testing.T) {
 		return false
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisReadinessConfigMap(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -291,7 +291,7 @@ func TestRedisLivenessProbeUsesTLS(t *testing.T) {
 	})).Return(nil)
 	ms.On("CreateOrUpdatePodDisruptionBudget", rf.Namespace, mock.Anything).Return(nil).Maybe()
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisStatefulset(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -322,7 +322,7 @@ func TestSentinelProbeUsesTLS(t *testing.T) {
 	})).Return(nil)
 	ms.On("CreateOrUpdatePodDisruptionBudget", rf.Namespace, mock.Anything).Return(nil).Maybe()
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureSentinelDeployment(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -384,7 +384,7 @@ func TestEnsureRedisCertificateCreatesCertManagerCert(t *testing.T) {
 		return true
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -444,7 +444,7 @@ func TestEnsureRedisCertificateAppendsExtraSANs(t *testing.T) {
 		return true
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -500,7 +500,7 @@ func TestEnsureRedisCertificateCoversInPodDials(t *testing.T) {
 		return true
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -531,6 +531,53 @@ func TestEnsureRedisCertificateCoversInPodDials(t *testing.T) {
 	}
 }
 
+func TestEnsureRedisCertificateUsesConfiguredClusterDomain(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+
+	var got *cmapi.Certificate
+	ms := &mK8SService.Services{}
+	ms.On("CreateOrUpdateCertificate", rf.Namespace, mock.MatchedBy(func(c *cmapi.Certificate) bool {
+		got = c
+		return true
+	})).Return(nil)
+
+	// cozystack's default cluster domain
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cozy.local")
+	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+
+	dnsSet := make(map[string]struct{}, len(got.Spec.DNSNames))
+	for _, d := range got.Spec.DNSNames {
+		dnsSet[d] = struct{}{}
+	}
+
+	// FQDN SANs must use the configured cluster domain.
+	for _, want := range []string{
+		rfservice.GetRedisName(rf) + "." + rf.Namespace + ".svc.cozy.local",
+		rfservice.GetRedisMasterName(rf) + "." + rf.Namespace + ".svc.cozy.local",
+		rfservice.GetSentinelName(rf) + "." + rf.Namespace + ".svc.cozy.local",
+		"*." + rfservice.GetRedisName(rf) + "." + rf.Namespace + ".svc.cozy.local",
+	} {
+		_, ok := dnsSet[want]
+		a.Truef(ok, "expected DNS SAN %q for custom cluster domain (got %v)", want, got.Spec.DNSNames)
+	}
+
+	// The default cluster.local FQDN must NOT appear when a custom
+	// domain is configured — otherwise the cert would silently mask
+	// SAN-mismatch bugs on non-default clusters.
+	for _, unwanted := range []string{
+		rfservice.GetRedisName(rf) + "." + rf.Namespace + ".svc.cluster.local",
+		"*." + rfservice.GetRedisName(rf) + "." + rf.Namespace + ".svc.cluster.local",
+	} {
+		_, ok := dnsSet[unwanted]
+		a.Falsef(ok, "cluster.local SAN %q must not be present when --cluster-domain=cozy.local (got %v)", unwanted, got.Spec.DNSNames)
+	}
+}
+
 func TestEnsureRedisCertificateLoopbackSANsArePresentWithoutExtras(t *testing.T) {
 	a := assert.New(t)
 	rf := generateTLSRF()
@@ -542,7 +589,7 @@ func TestEnsureRedisCertificateLoopbackSANsArePresentWithoutExtras(t *testing.T)
 		return true
 	})).Return(nil)
 
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisCertificate(rf, nil, nil))
 
 	if !a.NotNil(got) {
@@ -562,7 +609,7 @@ func TestEnsureRedisCertificateSkipsForBYOSecret(t *testing.T) {
 	rf.Spec.TLS.CertificateSecret = &redisfailoverv1.LocalSecretReference{SecretName: "byo-tls"}
 
 	ms := &mK8SService.Services{}
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 
 	a.NoError(gen.EnsureRedisCertificate(rf, nil, nil))
 	ms.AssertNotCalled(t, "CreateOrUpdateCertificate", mock.Anything, mock.Anything)
@@ -573,7 +620,7 @@ func TestEnsureRedisCertificateSkipsWhenDisabled(t *testing.T) {
 	rf := generateRF() // TLS = nil
 
 	ms := &mK8SService.Services{}
-	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy)
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 
 	a.NoError(gen.EnsureRedisCertificate(rf, nil, nil))
 	ms.AssertNotCalled(t, "CreateOrUpdateCertificate", mock.Anything, mock.Anything)
