@@ -64,6 +64,14 @@ type TLSSettings struct {
 	// CertificateSecret uses an existing Secret managed outside the operator.
 	// Mutually exclusive with CertManager.
 	CertificateSecret *LocalSecretReference `json:"certificateSecret,omitempty"`
+
+	// CACertSecretName names the Opaque Secret the operator publishes with
+	// only the CA certificate (ca.crt) extracted from the TLS material. It
+	// never contains tls.key, so RBAC can be scoped to it to let clients
+	// verify the server without exposing any private key. When TLS is
+	// enabled the operator always publishes this Secret; this field only
+	// overrides its name. Defaults to "<tls-secret-name>-ca" when empty.
+	CACertSecretName string `json:"caCertSecretName,omitempty"`
 }
 
 // CertManagerSettings drives creation of a cert-manager Certificate.
