@@ -676,6 +676,7 @@ func TestEnsureRedisCACertSecretPublishesCAOnly(t *testing.T) {
 
 	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisCACertSecret(rf, nil, nil))
+	ms.AssertExpectations(t)
 
 	if !a.NotNil(got) {
 		return
@@ -707,6 +708,7 @@ func TestEnsureRedisCACertSecretDefersWhenTLSSecretMissing(t *testing.T) {
 	// soft skip, not an error that blocks the rest of the reconcile.
 	a.NoError(gen.EnsureRedisCACertSecret(rf, nil, nil))
 	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+	ms.AssertExpectations(t)
 }
 
 func TestEnsureRedisCACertSecretReturnsErrorOnGetFailure(t *testing.T) {
@@ -721,6 +723,7 @@ func TestEnsureRedisCACertSecretReturnsErrorOnGetFailure(t *testing.T) {
 	// A non-NotFound error is a real failure and must propagate.
 	a.Error(gen.EnsureRedisCACertSecret(rf, nil, nil))
 	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+	ms.AssertExpectations(t)
 }
 
 func TestEnsureRedisCACertSecretDefersWhenCACrtMissing(t *testing.T) {
@@ -743,6 +746,7 @@ func TestEnsureRedisCACertSecretDefersWhenCACrtMissing(t *testing.T) {
 	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	a.NoError(gen.EnsureRedisCACertSecret(rf, nil, nil))
 	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+	ms.AssertExpectations(t)
 }
 
 func TestEnsureRedisCACertSecretSkipsWhenDisabled(t *testing.T) {
@@ -780,6 +784,7 @@ func TestEnsureRedisCACertSecretBYOWithOverrideName(t *testing.T) {
 
 	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
 	ensureSucceeded(t, gen.EnsureRedisCACertSecret(rf, nil, nil))
+	ms.AssertExpectations(t)
 
 	if !a.NotNil(got) {
 		return
