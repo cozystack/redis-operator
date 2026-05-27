@@ -47,7 +47,17 @@ jobs:
             -c user.name="$GITHUB_ACTOR" \
             -c user.email="${GITHUB_ACTOR}@users.noreply.github.com" \
             commit -q --allow-empty -m "Initialize gh-pages for Helm chart releases"
-          git -C "$tmp" push -q "$repo_url" gh-pages
+          # Another run may have created gh-pages between the ls-remote check
+          # above and this push. Treat a failed push whose branch now exists as
+          # success so the concurrent first-run race does not break the job.
+          if ! git -C "$tmp" push -q "$repo_url" gh-pages; then
+            if git ls-remote --exit-code --heads "$repo_url" gh-pages >/dev/null 2>&1; then
+              echo "gh-pages was created concurrently; continuing."
+            else
+              echo "Failed to create gh-pages branch."
+              exit 1
+            fi
+          fi
           git fetch "$repo_url" "gh-pages:refs/remotes/origin/gh-pages"
 
       - name: Release
