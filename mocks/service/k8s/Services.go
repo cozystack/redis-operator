@@ -85,6 +85,48 @@ func (_m *Services) CreateOrUpdateConfigMap(namespace string, np *v1.ConfigMap) 
 	return r0
 }
 
+// CreateSecret provides a mock function with given fields: namespace, secret
+func (_m *Services) CreateSecret(namespace string, secret *v1.Secret) error {
+	ret := _m.Called(namespace, secret)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, *v1.Secret) error); ok {
+		r0 = rf(namespace, secret)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// UpdateSecret provides a mock function with given fields: namespace, secret
+func (_m *Services) UpdateSecret(namespace string, secret *v1.Secret) error {
+	ret := _m.Called(namespace, secret)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, *v1.Secret) error); ok {
+		r0 = rf(namespace, secret)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// CreateOrUpdateSecret provides a mock function with given fields: namespace, secret
+func (_m *Services) CreateOrUpdateSecret(namespace string, secret *v1.Secret) error {
+	ret := _m.Called(namespace, secret)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, *v1.Secret) error); ok {
+		r0 = rf(namespace, secret)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
 // CreateOrUpdateDeployment provides a mock function with given fields: namespace, deployment
 func (_m *Services) CreateOrUpdateDeployment(namespace string, deployment *appsv1.Deployment) error {
 	ret := _m.Called(namespace, deployment)
