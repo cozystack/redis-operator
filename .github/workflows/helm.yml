@@ -26,6 +26,30 @@ jobs:
         with:
           version: v3.21.0
 
+      # chart-releaser requires a pre-existing gh-pages branch to publish the
+      # chart index and packages into, and it does not create one itself. Seed
+      # an empty gh-pages branch on first run so the Release step below does not
+      # fail with "invalid reference: origin/gh-pages". Idempotent: a no-op once
+      # the branch exists.
+      - name: Ensure gh-pages branch exists
+        env:
+          GH_PAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          repo_url="https://x-access-token:${GH_PAGES_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo_url" gh-pages >/dev/null 2>&1; then
+            echo "gh-pages branch already exists; nothing to do."
+            exit 0
+          fi
+          echo "gh-pages branch is missing; creating an empty one so chart-releaser can publish."
+          tmp="$(mktemp -d)"
+          git -C "$tmp" init -q -b gh-pages
+          git -C "$tmp" \
+            -c user.name="$GITHUB_ACTOR" \
+            -c user.email="${GITHUB_ACTOR}@users.noreply.github.com" \
+            commit -q --allow-empty -m "Initialize gh-pages for Helm chart releases"
+          git -C "$tmp" push -q "$repo_url" gh-pages
+          git fetch "$repo_url" "gh-pages:refs/remotes/origin/gh-pages"
+
       - name: Release
         uses: helm/chart-releaser-action@cae68fefc6b5f367a0275617c9f83181ba54714f # v1.7.0
         with:
