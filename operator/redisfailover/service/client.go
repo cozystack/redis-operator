@@ -205,7 +205,7 @@ func (r *RedisFailoverKubeClient) EnsureRedisCACertSecret(rf *redisfailoverv1.Re
 	caPEM := src.Data[tlsSecretCAKey]
 	if len(caPEM) == 0 {
 		r.logger.WithField("namespace", rf.Namespace).WithField("secret", srcName).
-			Warningf("TLS secret has no %q yet; deferring CA cert secret to a later reconcile", tlsSecretCAKey)
+			Debugf("TLS secret has no %q yet; deferring CA cert secret to a later reconcile", tlsSecretCAKey)
 		return nil
 	}
 	secret := generateRedisCACertSecret(rf, labels, ownerRefs, caPEM)
