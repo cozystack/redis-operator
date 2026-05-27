@@ -44,6 +44,14 @@ func (w *RedisFailoverHandler) Ensure(rf *redisfailoverv1.RedisFailover, labels 
 		return err
 	}
 
+	// Publish a CA-only Secret (ca.crt without any private key) derived from
+	// the TLS Secret so clients can verify the server under tightly scoped
+	// RBAC. No-op when TLS is disabled; defers gracefully until the TLS
+	// Secret's ca.crt is available.
+	if err := w.rfService.EnsureRedisCACertSecret(rf, labels, or); err != nil {
+		return err
+	}
+
 	if err := w.rfService.EnsureRedisShutdownConfigMap(rf, labels, or); err != nil {
 		return err
 	}

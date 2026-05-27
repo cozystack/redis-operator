@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	redisfailoverv1 "github.com/spotahome/redis-operator/api/redisfailover/v1"
@@ -363,6 +365,29 @@ func TestTLSSecretNamePrecedence(t *testing.T) {
 		"with TLS disabled the helper must return an empty string")
 }
 
+func TestTLSCACertSecretName(t *testing.T) {
+	a := assert.New(t)
+
+	rfCM := generateTLSRF()
+	a.Equal("rftls-"+rfCM.Name+"-ca", rfservice.GetTLSCACertSecretName(rfCM),
+		"default CA secret name derives from the TLS secret name with a -ca suffix")
+
+	rfOverride := generateTLSRF()
+	rfOverride.Spec.TLS.CACertSecretName = "custom-ca"
+	a.Equal("custom-ca", rfservice.GetTLSCACertSecretName(rfOverride),
+		"caCertSecretName must override the derived default")
+
+	rfBYO := generateTLSRF()
+	rfBYO.Spec.TLS.CertManager = nil
+	rfBYO.Spec.TLS.CertificateSecret = &redisfailoverv1.LocalSecretReference{SecretName: "byo-tls"}
+	a.Equal("byo-tls-ca", rfservice.GetTLSCACertSecretName(rfBYO),
+		"default CA secret name tracks the bring-your-own TLS secret name")
+
+	rfOff := generateRF()
+	a.Equal("", rfservice.GetTLSCACertSecretName(rfOff),
+		"with TLS disabled the helper must return an empty string")
+}
+
 func envToMap(env []corev1.EnvVar) map[string]string {
 	out := make(map[string]string, len(env))
 	for _, e := range env {
@@ -624,6 +649,143 @@ func TestEnsureRedisCertificateSkipsWhenDisabled(t *testing.T) {
 
 	a.NoError(gen.EnsureRedisCertificate(rf, nil, nil))
 	ms.AssertNotCalled(t, "CreateOrUpdateCertificate", mock.Anything, mock.Anything)
+}
+
+func TestEnsureRedisCACertSecretPublishesCAOnly(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	srcName := rfservice.GetTLSSecretName(rf)
+
+	leaf := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: srcName, Namespace: rf.Namespace},
+		Type:       corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"tls.crt": []byte("LEAF-CERT"),
+			"tls.key": []byte("LEAF-KEY"),
+			"ca.crt":  []byte("CA-PEM"),
+		},
+	}
+
+	var got *corev1.Secret
+	ms := &mK8SService.Services{}
+	ms.On("GetSecret", rf.Namespace, srcName).Return(leaf, nil)
+	ms.On("CreateOrUpdateSecret", rf.Namespace, mock.MatchedBy(func(s *corev1.Secret) bool {
+		got = s
+		return true
+	})).Return(nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
+	ensureSucceeded(t, gen.EnsureRedisCACertSecret(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+	a.Equal(rfservice.GetTLSCACertSecretName(rf), got.Name)
+	a.Equal(rf.Namespace, got.Namespace)
+	a.Equal(corev1.SecretTypeOpaque, got.Type)
+	a.Equal([]byte("CA-PEM"), got.Data["ca.crt"])
+	// The whole point of the feature: the published Secret must carry the CA
+	// certificate and nothing else — no private key, no leaf cert.
+	a.Len(got.Data, 1, "CA-only Secret must hold exactly one key (ca.crt)")
+	_, hasKey := got.Data["tls.key"]
+	a.False(hasKey, "CA-only Secret must not contain tls.key")
+	_, hasCert := got.Data["tls.crt"]
+	a.False(hasCert, "CA-only Secret must not contain tls.crt")
+}
+
+func TestEnsureRedisCACertSecretDefersWhenTLSSecretMissing(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	srcName := rfservice.GetTLSSecretName(rf)
+
+	ms := &mK8SService.Services{}
+	ms.On("GetSecret", rf.Namespace, srcName).
+		Return(nil, apierrors.NewNotFound(corev1.Resource("secrets"), srcName))
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
+	// Not-yet-populated TLS secret (cert-manager is asynchronous) must be a
+	// soft skip, not an error that blocks the rest of the reconcile.
+	a.NoError(gen.EnsureRedisCACertSecret(rf, nil, nil))
+	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+}
+
+func TestEnsureRedisCACertSecretReturnsErrorOnGetFailure(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	srcName := rfservice.GetTLSSecretName(rf)
+
+	ms := &mK8SService.Services{}
+	ms.On("GetSecret", rf.Namespace, srcName).Return(nil, errors.New("api server unavailable"))
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
+	// A non-NotFound error is a real failure and must propagate.
+	a.Error(gen.EnsureRedisCACertSecret(rf, nil, nil))
+	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+}
+
+func TestEnsureRedisCACertSecretDefersWhenCACrtMissing(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	srcName := rfservice.GetTLSSecretName(rf)
+
+	leaf := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: srcName, Namespace: rf.Namespace},
+		Type:       corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"tls.crt": []byte("LEAF-CERT"),
+			"tls.key": []byte("LEAF-KEY"),
+		},
+	}
+
+	ms := &mK8SService.Services{}
+	ms.On("GetSecret", rf.Namespace, srcName).Return(leaf, nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
+	a.NoError(gen.EnsureRedisCACertSecret(rf, nil, nil))
+	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+}
+
+func TestEnsureRedisCACertSecretSkipsWhenDisabled(t *testing.T) {
+	a := assert.New(t)
+	rf := generateRF() // TLS == nil
+
+	ms := &mK8SService.Services{}
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
+
+	a.NoError(gen.EnsureRedisCACertSecret(rf, nil, nil))
+	ms.AssertNotCalled(t, "GetSecret", mock.Anything, mock.Anything)
+	ms.AssertNotCalled(t, "CreateOrUpdateSecret", mock.Anything, mock.Anything)
+}
+
+func TestEnsureRedisCACertSecretBYOWithOverrideName(t *testing.T) {
+	a := assert.New(t)
+	rf := generateTLSRF()
+	rf.Spec.TLS.CertManager = nil
+	rf.Spec.TLS.CertificateSecret = &redisfailoverv1.LocalSecretReference{SecretName: "byo-tls"}
+	rf.Spec.TLS.CACertSecretName = "my-ca-bundle"
+
+	leaf := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "byo-tls", Namespace: rf.Namespace},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"ca.crt": []byte("BYO-CA")},
+	}
+
+	var got *corev1.Secret
+	ms := &mK8SService.Services{}
+	ms.On("GetSecret", rf.Namespace, "byo-tls").Return(leaf, nil)
+	ms.On("CreateOrUpdateSecret", rf.Namespace, mock.MatchedBy(func(s *corev1.Secret) bool {
+		got = s
+		return true
+	})).Return(nil)
+
+	gen := rfservice.NewRedisFailoverKubeClient(ms, log.DummyLogger{}, metrics.Dummy, "cluster.local")
+	ensureSucceeded(t, gen.EnsureRedisCACertSecret(rf, nil, nil))
+
+	if !a.NotNil(got) {
+		return
+	}
+	a.Equal("my-ca-bundle", got.Name, "explicit caCertSecretName override must be honored in BYO mode")
+	a.Equal([]byte("BYO-CA"), got.Data["ca.crt"])
 }
 
 // unused, but force-keep imports if they get trimmed when tests above are removed

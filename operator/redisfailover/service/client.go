@@ -1,6 +1,7 @@
 package service
 
 import (
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -26,6 +27,7 @@ type RedisFailoverClient interface {
 	EnsureRedisConfigMap(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 	EnsureNotPresentRedisService(rFailover *redisfailoverv1.RedisFailover) error
 	EnsureRedisCertificate(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
+	EnsureRedisCACertSecret(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 }
 
 // RedisFailoverKubeClient implements the required methods to talk with kubernetes
@@ -172,6 +174,43 @@ func (r *RedisFailoverKubeClient) EnsureRedisCertificate(rf *redisfailoverv1.Red
 	cert := generateRedisCertificate(rf, labels, ownerRefs, r.clusterDomain)
 	err := r.K8SService.CreateOrUpdateCertificate(rf.Namespace, cert)
 	r.setEnsureOperationMetrics(cert.Namespace, cert.Name, "Certificate", rf.Name, err)
+	return err
+}
+
+// EnsureRedisCACertSecret publishes an Opaque Secret containing only ca.crt,
+// extracted from the cluster's TLS secret. The CA-only Secret never holds a
+// private key, so RBAC can be scoped to it to let clients verify the Redis
+// server without exposing tls.key. It is a no-op when TLS is disabled and
+// applies to both cert-manager and bring-your-own-secret modes.
+//
+// The source TLS secret is populated asynchronously by cert-manager, or
+// managed externally in bring-your-own mode, so a missing secret or a
+// missing/empty ca.crt is treated as "not ready yet": the method logs and
+// returns nil so the rest of the reconcile proceeds and a later pass
+// republishes the CA certificate once it becomes available.
+func (r *RedisFailoverKubeClient) EnsureRedisCACertSecret(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error {
+	if !TLSEnabled(rf) {
+		return nil
+	}
+	srcName := GetTLSSecretName(rf)
+	src, err := r.K8SService.GetSecret(rf.Namespace, srcName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			r.logger.WithField("namespace", rf.Namespace).WithField("secret", srcName).
+				Debugf("TLS secret not present yet; deferring CA cert secret to a later reconcile")
+			return nil
+		}
+		return err
+	}
+	caPEM := src.Data[tlsSecretCAKey]
+	if len(caPEM) == 0 {
+		r.logger.WithField("namespace", rf.Namespace).WithField("secret", srcName).
+			Warningf("TLS secret has no %q yet; deferring CA cert secret to a later reconcile", tlsSecretCAKey)
+		return nil
+	}
+	secret := generateRedisCACertSecret(rf, labels, ownerRefs, caPEM)
+	err = r.K8SService.CreateOrUpdateSecret(rf.Namespace, secret)
+	r.setEnsureOperationMetrics(secret.Namespace, secret.Name, "Secret", rf.Name, err)
 	return err
 }
 

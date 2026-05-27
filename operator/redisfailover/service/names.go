@@ -72,6 +72,20 @@ func GetTLSSecretName(rf *redisfailoverv1.RedisFailover) string {
 	return generateName(tlsCertificateName, rf.Name)
 }
 
+// GetTLSCACertSecretName returns the name of the Opaque Secret the operator
+// publishes with only ca.crt (no private key). It honors an explicit override
+// via spec.tls.caCertSecretName; otherwise it derives from the TLS secret name
+// as "<tls-secret-name>-ca". Returns the empty string when TLS is disabled.
+func GetTLSCACertSecretName(rf *redisfailoverv1.RedisFailover) string {
+	if !TLSEnabled(rf) {
+		return ""
+	}
+	if name := rf.Spec.TLS.CACertSecretName; name != "" {
+		return name
+	}
+	return GetTLSSecretName(rf) + "-ca"
+}
+
 // TLSEnabled is a small helper used pervasively in the generator.
 func TLSEnabled(rf *redisfailoverv1.RedisFailover) bool {
 	return rf.Spec.TLS != nil && rf.Spec.TLS.Enabled
