@@ -1,6 +1,8 @@
 package v1
 
 import (
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -27,6 +29,87 @@ type RedisFailoverSpec struct {
 	Auth           AuthSettings       `json:"auth,omitempty"`
 	LabelWhitelist []string           `json:"labelWhitelist,omitempty"`
 	BootstrapNode  *BootstrapSettings `json:"bootstrapNode,omitempty"`
+	TLS            *TLSSettings       `json:"tls,omitempty"`
+}
+
+// TLS auth-clients values map directly to Redis tls-auth-clients directive.
+const (
+	TLSAuthClientsNo       = "no"
+	TLSAuthClientsOptional = "optional"
+	TLSAuthClientsYes      = "yes"
+)
+
+// TLSSettings configures TLS for the Redis failover cluster.
+// When Enabled is true, exactly one of CertManager or CertificateSecret must
+// be set. The resulting Kubernetes Secret must contain the standard cert-manager
+// keys (tls.crt, tls.key, ca.crt) and is mounted read-only into both Redis and
+// Sentinel pods at /tls.
+type TLSSettings struct {
+	// Enabled toggles TLS. Disabling TLS clears any provisioning fields:
+	// the operator does not delete a CertManager-created Certificate when
+	// switching back to plain TCP. Leaving Enabled=false is the default.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// AuthClients maps to the Redis tls-auth-clients directive.
+	// One of "no", "optional", "yes". Defaults to "no" — server certificate
+	// is presented but client certificates are not validated.
+	// +kubebuilder:validation:Enum=no;optional;yes
+	AuthClients string `json:"authClients,omitempty"`
+
+	// CertManager provisions the server certificate by creating a
+	// cert-manager Certificate that references the given Issuer.
+	// Mutually exclusive with CertificateSecret.
+	CertManager *CertManagerSettings `json:"certManager,omitempty"`
+
+	// CertificateSecret uses an existing Secret managed outside the operator.
+	// Mutually exclusive with CertManager.
+	CertificateSecret *LocalSecretReference `json:"certificateSecret,omitempty"`
+}
+
+// CertManagerSettings drives creation of a cert-manager Certificate.
+// The operator generates DNS SANs for the headless redis service, the
+// per-pod headless DNS names, the redis master/slave services and the
+// sentinel service. IP SANs are not used because pod IPs are unstable.
+type CertManagerSettings struct {
+	// IssuerRef points at an Issuer or ClusterIssuer. The Name field is
+	// required. Kind defaults to "Issuer" and Group defaults to
+	// "cert-manager.io" when empty.
+	IssuerRef cmmeta.IssuerReference `json:"issuerRef"`
+
+	// SecretName overrides the default Secret name (<rfname>-tls) into
+	// which cert-manager writes the issued certificate.
+	SecretName string `json:"secretName,omitempty"`
+
+	// Duration is the requested certificate validity. Optional;
+	// cert-manager uses its own default (typically 90 days) when unset.
+	Duration *metav1.Duration `json:"duration,omitempty"`
+
+	// RenewBefore is how long before expiry cert-manager should renew.
+	// Optional; cert-manager uses its own default (typically 2/3 of
+	// Duration) when unset.
+	RenewBefore *metav1.Duration `json:"renewBefore,omitempty"`
+
+	// PrivateKey configures the private key algorithm, size and rotation
+	// policy. Optional; cert-manager uses RSA 2048 with rotation policy
+	// "Never" when unset.
+	PrivateKey *cmapi.CertificatePrivateKey `json:"privateKey,omitempty"`
+
+	// ExtraSANs is a list of additional Subject Alternative Names to add
+	// to the generated certificate. Entries are auto-classified: values
+	// that parse as IPv4 or IPv6 addresses become IP SANs, everything
+	// else becomes a DNS SAN. Extras are appended to — never replace —
+	// the service and per-pod SANs the operator computes, so in-cluster
+	// connectivity is preserved when extras are added.
+	// +optional
+	ExtraSANs []string `json:"extraSANs,omitempty"`
+}
+
+// LocalSecretReference points at a Secret in the same namespace as the
+// owning RedisFailover.
+type LocalSecretReference struct {
+	// SecretName is the name of the Secret that contains the TLS material
+	// (tls.crt, tls.key, ca.crt).
+	SecretName string `json:"secretName"`
 }
 
 // RedisCommandRename defines the specification of a "rename-command" configuration option

@@ -91,20 +91,20 @@ func (_m *RedisFailoverCheck) CheckRedisSlavesReady(slaveIP string, rFailover *v
 	return r0, r1
 }
 
-// CheckSentinelMonitor provides a mock function with given fields: sentinel, monitor
-func (_m *RedisFailoverCheck) CheckSentinelMonitor(sentinel string, monitor ...string) error {
+// CheckSentinelMonitor provides a mock function with given fields: rFailover, sentinel, monitor
+func (_m *RedisFailoverCheck) CheckSentinelMonitor(rFailover *v1.RedisFailover, sentinel string, monitor ...string) error {
 	_va := make([]interface{}, len(monitor))
 	for _i := range monitor {
 		_va[_i] = monitor[_i]
 	}
 	var _ca []interface{}
-	_ca = append(_ca, sentinel)
+	_ca = append(_ca, rFailover, sentinel)
 	_ca = append(_ca, _va...)
 	ret := _m.Called(_ca...)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(string, ...string) error); ok {
-		r0 = rf(sentinel, monitor...)
+	if rf, ok := ret.Get(0).(func(*v1.RedisFailover, string, ...string) error); ok {
+		r0 = rf(rFailover, sentinel, monitor...)
 	} else {
 		r0 = ret.Error(0)
 	}

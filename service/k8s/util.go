@@ -3,9 +3,10 @@ package k8s
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+
 	redisfailoverv1 "github.com/spotahome/redis-operator/api/redisfailover/v1"
 	"github.com/spotahome/redis-operator/metrics"
-	"k8s.io/apimachinery/pkg/api/errors"
 )
 
 // GetRedisPassword retreives password from kubernetes secret or, if

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"strconv"
@@ -17,6 +18,48 @@ import (
 	"github.com/spotahome/redis-operator/service/redis"
 )
 
+// tlsConfigFor reads the cluster's TLS secret and builds the tls.Config
+// the operator uses to dial Redis and Sentinel pods. Returns (nil, nil)
+// when spec.tls.enabled is false, which is the signal callers feed to
+// the redis client to dial plaintext. ServerName is set to the redis
+// headless service name so the certificate's SAN list matches.
+func tlsConfigFor(s k8s.Services, rf *redisfailoverv1.RedisFailover) (*tls.Config, error) {
+	if !TLSEnabled(rf) {
+		return nil, nil
+	}
+	secretName := GetTLSSecretName(rf)
+	secret, err := s.GetSecret(rf.Namespace, secretName)
+	if err != nil {
+		return nil, fmt.Errorf("tls: reading secret %s/%s: %w", rf.Namespace, secretName, err)
+	}
+	caPEM, ok := secret.Data["ca.crt"]
+	if !ok {
+		return nil, fmt.Errorf("tls: secret %s/%s does not contain ca.crt", rf.Namespace, secretName)
+	}
+	if len(caPEM) == 0 {
+		return nil, fmt.Errorf("tls: secret %s/%s contains an empty ca.crt", rf.Namespace, secretName)
+	}
+	// When the failover runs with tls-auth-clients yes, Redis and
+	// Sentinel reject any client that does not present a certificate
+	// signed by the same CA. Load the leaf certificate and its key
+	// from the standard cert-manager secret keys so the operator's
+	// internal client can authenticate itself.
+	var certPEM, keyPEM []byte
+	if rf.Spec.TLS.AuthClients == redisfailoverv1.TLSAuthClientsYes {
+		certPEM = secret.Data["tls.crt"]
+		if len(certPEM) == 0 {
+			return nil, fmt.Errorf("tls: secret %s/%s does not contain tls.crt (required for authClients=%s)",
+				rf.Namespace, secretName, redisfailoverv1.TLSAuthClientsYes)
+		}
+		keyPEM = secret.Data["tls.key"]
+		if len(keyPEM) == 0 {
+			return nil, fmt.Errorf("tls: secret %s/%s does not contain tls.key (required for authClients=%s)",
+				rf.Namespace, secretName, redisfailoverv1.TLSAuthClientsYes)
+		}
+	}
+	return redis.BuildTLSConfig(caPEM, certPEM, keyPEM, GetRedisName(rf))
+}
+
 // RedisFailoverCheck defines the interface able to check the correct status of a redis failover
 type RedisFailoverCheck interface {
 	CheckRedisNumber(rFailover *redisfailoverv1.RedisFailover) error
@@ -26,7 +69,7 @@ type RedisFailoverCheck interface {
 	CheckSentinelSlavesNumberInMemory(sentinel string, rFailover *redisfailoverv1.RedisFailover) error
 	CheckSentinelQuorum(rFailover *redisfailoverv1.RedisFailover) (int, error)
 	CheckIfMasterLocalhost(rFailover *redisfailoverv1.RedisFailover) (bool, error)
-	CheckSentinelMonitor(sentinel string, monitor ...string) error
+	CheckSentinelMonitor(rFailover *redisfailoverv1.RedisFailover, sentinel string, monitor ...string) error
 	GetMasterIP(rFailover *redisfailoverv1.RedisFailover) (string, error)
 	GetNumberMasters(rFailover *redisfailoverv1.RedisFailover) (int, error)
 	GetRedisesIPs(rFailover *redisfailoverv1.RedisFailover) ([]string, error)
@@ -114,6 +157,11 @@ func (r *RedisFailoverChecker) CheckAllSlavesFromMaster(master string, rf *redis
 		return err
 	}
 
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return err
+	}
+
 	rport := getRedisPort(rf.Spec.Redis.Port)
 	for _, rp := range rps.Items {
 		if rp.Status.PodIP == master {
@@ -128,7 +176,7 @@ func (r *RedisFailoverChecker) CheckAllSlavesFromMaster(master string, rf *redis
 			}
 		}
 
-		slave, err := r.redisClient.GetSlaveOf(rp.Status.PodIP, rport, password)
+		slave, err := r.redisClient.GetSlaveOf(rp.Status.PodIP, rport, password, tlsConfig)
 		if err != nil {
 			r.logger.Errorf("Get slave of master failed, maybe this node is not ready, pod ip: %s", rp.Status.PodIP)
 			return err
@@ -142,7 +190,11 @@ func (r *RedisFailoverChecker) CheckAllSlavesFromMaster(master string, rf *redis
 
 // CheckSentinelNumberInMemory controls that the provided sentinel has only the living sentinels on its memory.
 func (r *RedisFailoverChecker) CheckSentinelNumberInMemory(sentinel string, rf *redisfailoverv1.RedisFailover) error {
-	nSentinels, err := r.redisClient.GetNumberSentinelsInMemory(sentinel)
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return err
+	}
+	nSentinels, err := r.redisClient.GetNumberSentinelsInMemory(sentinel, tlsConfig)
 	if err != nil {
 		return err
 	} else if nSentinels != rf.Spec.Sentinel.Replicas {
@@ -169,9 +221,13 @@ func (r *RedisFailoverChecker) CheckIfMasterLocalhost(rFailover *redisfailoverv1
 		r.logger.Errorf("CheckIfMasterLocalhost -- GetRedisPassword Failed")
 		return false, err
 	}
+	tlsConfig, err := tlsConfigFor(r.k8sService, rFailover)
+	if err != nil {
+		return false, err
+	}
 	rport := getRedisPort(rFailover.Spec.Redis.Port)
 	for _, sip := range redisIps {
-		master, err := r.redisClient.GetSlaveOf(sip, rport, password)
+		master, err := r.redisClient.GetSlaveOf(sip, rport, password, tlsConfig)
 		if err != nil {
 			r.logger.Warningf("CheckIfMasterLocalhost -- GetSlaveOf Failed")
 			return false, err
@@ -209,9 +265,13 @@ func (r *RedisFailoverChecker) CheckSentinelQuorum(rFailover *redisfailoverv1.Re
 		return unhealthyCnt, errors.New("insufficnet sentinel to reach Quorum")
 	}
 
+	tlsConfig, err := tlsConfigFor(r.k8sService, rFailover)
+	if err != nil {
+		return unhealthyCnt, err
+	}
 	unhealthyCnt = 0
 	for _, sip := range sentinels {
-		err = r.redisClient.SentinelCheckQuorum(sip)
+		err = r.redisClient.SentinelCheckQuorum(sip, tlsConfig)
 		if err != nil {
 			unhealthyCnt += 1
 		} else {
@@ -228,7 +288,11 @@ func (r *RedisFailoverChecker) CheckSentinelQuorum(rFailover *redisfailoverv1.Re
 
 // CheckSentinelSlavesNumberInMemory controls that the provided sentinel has only the expected slaves number.
 func (r *RedisFailoverChecker) CheckSentinelSlavesNumberInMemory(sentinel string, rf *redisfailoverv1.RedisFailover) error {
-	nSlaves, err := r.redisClient.GetNumberSentinelSlavesInMemory(sentinel)
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return err
+	}
+	nSlaves, err := r.redisClient.GetNumberSentinelSlavesInMemory(sentinel, tlsConfig)
 	if err != nil {
 		return err
 	} else {
@@ -247,13 +311,17 @@ func (r *RedisFailoverChecker) CheckSentinelSlavesNumberInMemory(sentinel string
 }
 
 // CheckSentinelMonitor controls if the sentinels are monitoring the expected master
-func (r *RedisFailoverChecker) CheckSentinelMonitor(sentinel string, monitor ...string) error {
+func (r *RedisFailoverChecker) CheckSentinelMonitor(rf *redisfailoverv1.RedisFailover, sentinel string, monitor ...string) error {
 	monitorIP := monitor[0]
 	monitorPort := ""
 	if len(monitor) > 1 {
 		monitorPort = monitor[1]
 	}
-	actualMonitorIP, actualMonitorPort, err := r.redisClient.GetSentinelMonitor(sentinel)
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return err
+	}
+	actualMonitorIP, actualMonitorPort, err := r.redisClient.GetSentinelMonitor(sentinel, tlsConfig)
 	if err != nil {
 		return err
 	}
@@ -274,11 +342,15 @@ func (r *RedisFailoverChecker) GetMasterIP(rf *redisfailoverv1.RedisFailover) (s
 	if err != nil {
 		return "", err
 	}
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return "", err
+	}
 
 	masters := []string{}
 	rport := getRedisPort(rf.Spec.Redis.Port)
 	for _, rip := range rips {
-		master, err := r.redisClient.IsMaster(rip, rport, password)
+		master, err := r.redisClient.IsMaster(rip, rport, password, tlsConfig)
 		if err != nil {
 			r.logger.Errorf("Get redis info failed, maybe this node is not ready, pod ip: %s", rip)
 			continue
@@ -299,7 +371,7 @@ func (r *RedisFailoverChecker) GetNumberMasters(rf *redisfailoverv1.RedisFailove
 	nMasters := 0
 	rips, err := r.GetRedisesIPs(rf)
 	if err != nil {
-		r.logger.Errorf(err.Error())
+		r.logger.Errorf("%s", err.Error())
 		return nMasters, err
 	}
 
@@ -308,10 +380,14 @@ func (r *RedisFailoverChecker) GetNumberMasters(rf *redisfailoverv1.RedisFailove
 		r.logger.Errorf("Error getting password: %s", err.Error())
 		return nMasters, err
 	}
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return nMasters, err
+	}
 
 	rport := getRedisPort(rf.Spec.Redis.Port)
 	for _, rip := range rips {
-		master, err := r.redisClient.IsMaster(rip, rport, password)
+		master, err := r.redisClient.IsMaster(rip, rport, password, tlsConfig)
 		if err != nil {
 			r.logger.Errorf("Get redis info failed, maybe this node is not ready, pod ip: %s", rip)
 			continue
@@ -386,11 +462,15 @@ func (r *RedisFailoverChecker) GetRedisesSlavesPods(rf *redisfailoverv1.RedisFai
 	if err != nil {
 		return redises, err
 	}
+	tlsConfig, err := tlsConfigFor(r.k8sService, rf)
+	if err != nil {
+		return redises, err
+	}
 
 	rport := getRedisPort(rf.Spec.Redis.Port)
 	for _, rp := range rps.Items {
 		if rp.Status.Phase == corev1.PodRunning && rp.DeletionTimestamp == nil { // Only work with running
-			master, err := r.redisClient.IsMaster(rp.Status.PodIP, rport, password)
+			master, err := r.redisClient.IsMaster(rp.Status.PodIP, rport, password, tlsConfig)
 			if err != nil {
 				return []string{}, err
 			}
@@ -413,11 +493,15 @@ func (r *RedisFailoverChecker) GetRedisesMasterPod(rFailover *redisfailoverv1.Re
 	if err != nil {
 		return "", err
 	}
+	tlsConfig, err := tlsConfigFor(r.k8sService, rFailover)
+	if err != nil {
+		return "", err
+	}
 
 	rport := getRedisPort(rFailover.Spec.Redis.Port)
 	for _, rp := range rps.Items {
 		if rp.Status.Phase == corev1.PodRunning && rp.DeletionTimestamp == nil { // Only work with running
-			master, err := r.redisClient.IsMaster(rp.Status.PodIP, rport, password)
+			master, err := r.redisClient.IsMaster(rp.Status.PodIP, rport, password, tlsConfig)
 			if err != nil {
 				return "", err
 			}
@@ -470,9 +554,13 @@ func (r *RedisFailoverChecker) CheckRedisSlavesReady(ip string, rFailover *redis
 	if err != nil {
 		return false, err
 	}
+	tlsConfig, err := tlsConfigFor(r.k8sService, rFailover)
+	if err != nil {
+		return false, err
+	}
 
 	port := getRedisPort(rFailover.Spec.Redis.Port)
-	return r.redisClient.SlaveIsReady(ip, port, password)
+	return r.redisClient.SlaveIsReady(ip, port, password, tlsConfig)
 }
 
 // IsRedisRunning returns true if all the pods are Running

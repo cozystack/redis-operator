@@ -3,9 +3,11 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"strings"
 	"text/template"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -19,9 +21,24 @@ import (
 
 const (
 	redisConfigurationVolumeName = "redis-config"
-	// Template used to build the Redis configuration
+	// Template used to build the Redis configuration.
+	//
+	// When TLS is enabled the plain port is disabled (port 0) and the
+	// instance listens on tls-port using the same numeric value as
+	// Spec.Redis.Port — TLS replaces plaintext rather than running
+	// alongside it.
 	redisConfigTemplate = `slaveof 127.0.0.1 {{.Spec.Redis.Port}}
+{{- if tlsEnabled . }}
+port 0
+tls-port {{.Spec.Redis.Port}}
+tls-cert-file ` + tlsCertFile + `
+tls-key-file ` + tlsKeyFile + `
+tls-ca-cert-file ` + tlsCAFile + `
+tls-auth-clients {{ .Spec.TLS.AuthClients }}
+tls-replication yes
+{{- else }}
 port {{.Spec.Redis.Port}}
+{{- end }}
 tcp-keepalive 60
 save 900 1
 save 300 10
@@ -31,7 +48,16 @@ rename-command "{{.From}}" "{{.To}}"
 {{- end}}
 `
 
-	sentinelConfigTemplate = `sentinel monitor mymaster 127.0.0.1 {{.Spec.Redis.Port}} 2
+	sentinelConfigTemplate = `{{- if tlsEnabled . }}
+port 0
+tls-port 26379
+tls-cert-file ` + tlsCertFile + `
+tls-key-file ` + tlsKeyFile + `
+tls-ca-cert-file ` + tlsCAFile + `
+tls-auth-clients {{ .Spec.TLS.AuthClients }}
+tls-replication yes
+{{- end }}
+sentinel monitor mymaster 127.0.0.1 {{.Spec.Redis.Port}} 2
 sentinel down-after-milliseconds mymaster 1000
 sentinel failover-timeout mymaster 3000
 sentinel parallel-syncs mymaster 2`
@@ -44,6 +70,132 @@ sentinel parallel-syncs mymaster 2`
 
 	graceTime = 30
 )
+
+// redisTemplateFuncs is the FuncMap shared by the redis/sentinel config
+// templates. Only pure read-only helpers belong here.
+var redisTemplateFuncs = template.FuncMap{
+	"tlsEnabled": TLSEnabled,
+}
+
+// redisCLITLSFlags returns the trailing space-suffixed flag block that
+// every redis-cli invocation in the pod scripts needs when TLS is on.
+// Returns an empty string when TLS is disabled so the scripts stay
+// untouched in the plaintext case.
+func redisCLITLSFlags(rf *redisfailoverv1.RedisFailover) string {
+	if !TLSEnabled(rf) {
+		return ""
+	}
+	return fmt.Sprintf("--tls --cert %s --key %s --cacert %s ", tlsCertFile, tlsKeyFile, tlsCAFile)
+}
+
+// generateRedisCertificate builds the cert-manager Certificate that
+// covers all Redis and Sentinel endpoints of the failover.
+//
+// SAN coverage:
+//   - the four Service DNS names (redis headless, redis master,
+//     redis slave, sentinel) in short, namespaced and FQDN form
+//   - the per-pod DNS records of the redis headless service so the
+//     operator can dial pods by stable name with TLS verification on
+//   - localhost (DNS) and 127.0.0.1 / ::1 (IP) so the in-pod TLS
+//     dials performed by liveness probes, the redis_exporter sidecar
+//     and the sentinel monitor target verify cleanly
+//
+// Pod IPs are still not added: they are unstable, and the operator
+// uses ServerName override in tls.Config to validate pod-IP-targeted
+// dials against the headless DNS SAN instead.
+func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference, clusterDomain string) *cmapi.Certificate {
+	name := GetTLSCertificateName(rf)
+	secretName := GetTLSSecretName(rf)
+	cm := rf.Spec.TLS.CertManager
+
+	dnsNames, ipAddresses := redisCertificateSANs(rf, clusterDomain)
+	for _, san := range cm.ExtraSANs {
+		if ip := net.ParseIP(san); ip != nil {
+			ipAddresses = append(ipAddresses, ip.String())
+			continue
+		}
+		dnsNames = append(dnsNames, san)
+	}
+
+	cert := &cmapi.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       rf.Namespace,
+			Labels:          labels,
+			OwnerReferences: ownerRefs,
+		},
+		Spec: cmapi.CertificateSpec{
+			SecretName:  secretName,
+			IssuerRef:   cm.IssuerRef,
+			DNSNames:    dnsNames,
+			IPAddresses: ipAddresses,
+			Usages: []cmapi.KeyUsage{
+				cmapi.UsageDigitalSignature,
+				cmapi.UsageKeyEncipherment,
+				cmapi.UsageServerAuth,
+				cmapi.UsageClientAuth,
+			},
+		},
+	}
+	if cm.Duration != nil {
+		cert.Spec.Duration = cm.Duration
+	}
+	if cm.RenewBefore != nil {
+		cert.Spec.RenewBefore = cm.RenewBefore
+	}
+	if cm.PrivateKey != nil {
+		cert.Spec.PrivateKey = cm.PrivateKey
+	}
+	return cert
+}
+
+// redisCertificateSANs returns the DNS and IP SANs the Certificate
+// must cover. Each Service appears in three forms (short, namespaced,
+// FQDN) so the same certificate validates regardless of how callers
+// resolve it. localhost and the loopback IPs are included so the
+// in-pod self-dials (liveness probes via -h localhost, the
+// redis_exporter sidecar via 127.0.0.1, the sentinel monitor target
+// 127.0.0.1) verify cleanly against the same cert.
+//
+// clusterDomain is the cluster's DNS suffix (e.g. "cluster.local",
+// "cozy.local"). An empty value falls back to "cluster.local" so
+// existing deployments that never set --cluster-domain keep working.
+func redisCertificateSANs(rf *redisfailoverv1.RedisFailover, clusterDomain string) (dnsNames, ipAddresses []string) {
+	if clusterDomain == "" {
+		clusterDomain = "cluster.local"
+	}
+	ns := rf.Namespace
+
+	for _, svc := range []string{
+		GetRedisName(rf),
+		GetRedisMasterName(rf),
+		GetRedisSlaveName(rf),
+		GetSentinelName(rf),
+	} {
+		dnsNames = append(dnsNames,
+			svc,
+			fmt.Sprintf("%s.%s", svc, ns),
+			fmt.Sprintf("%s.%s.svc", svc, ns),
+			fmt.Sprintf("%s.%s.svc.%s", svc, ns, clusterDomain),
+		)
+	}
+
+	// Headless service has per-pod DNS records:
+	// <pod>.<headless>.<ns>.svc.<cluster-domain>. We don't know pod
+	// count up front; cover the wildcard so any replica resolves
+	// correctly.
+	headless := GetRedisName(rf)
+	dnsNames = append(dnsNames,
+		fmt.Sprintf("*.%s", headless),
+		fmt.Sprintf("*.%s.%s", headless, ns),
+		fmt.Sprintf("*.%s.%s.svc", headless, ns),
+		fmt.Sprintf("*.%s.%s.svc.%s", headless, ns, clusterDomain),
+		"localhost",
+	)
+
+	ipAddresses = []string{"127.0.0.1", "::1"}
+	return dnsNames, ipAddresses
+}
 
 func generateSentinelService(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) *corev1.Service {
 	name := GetSentinelName(rf)
@@ -183,7 +335,7 @@ func generateSentinelConfigMap(rf *redisfailoverv1.RedisFailover, labels map[str
 
 	labels = util.MergeLabels(labels, generateSelectorLabels(sentinelRoleName, rf.Name))
 
-	tmpl, err := template.New("sentinel").Parse(sentinelConfigTemplate)
+	tmpl, err := template.New("sentinel").Funcs(redisTemplateFuncs).Parse(sentinelConfigTemplate)
 	if err != nil {
 		panic(err)
 	}
@@ -212,7 +364,7 @@ func generateRedisConfigMap(rf *redisfailoverv1.RedisFailover, labels map[string
 	name := GetRedisName(rf)
 	labels = util.MergeLabels(labels, generateSelectorLabels(redisRoleName, rf.Name))
 
-	tmpl, err := template.New("redis").Parse(redisConfigTemplate)
+	tmpl, err := template.New("redis").Funcs(redisTemplateFuncs).Parse(redisConfigTemplate)
 	if err != nil {
 		panic(err)
 	}
@@ -246,19 +398,20 @@ func generateRedisShutdownConfigMap(rf *redisfailoverv1.RedisFailover, labels ma
 	port := rf.Spec.Redis.Port
 	namespace := rf.Namespace
 	rfName := strings.Replace(strings.ToUpper(rf.Name), "-", "_", -1)
+	tlsFlags := redisCLITLSFlags(rf)
 
 	labels = util.MergeLabels(labels, generateSelectorLabels(redisRoleName, rf.Name))
-	shutdownContent := fmt.Sprintf(`master=$(redis-cli -h ${RFS_%[1]v_SERVICE_HOST} -p ${RFS_%[1]v_SERVICE_PORT_SENTINEL} --csv SENTINEL get-master-addr-by-name mymaster | tr ',' ' ' | tr -d '\"' |cut -d' ' -f1)
+	shutdownContent := fmt.Sprintf(`master=$(redis-cli %[3]s-h ${RFS_%[1]v_SERVICE_HOST} -p ${RFS_%[1]v_SERVICE_PORT_SENTINEL} --csv SENTINEL get-master-addr-by-name mymaster | tr ',' ' ' | tr -d '\"' |cut -d' ' -f1)
 if [ "$master" = "$(hostname -i)" ]; then
-  redis-cli -h ${RFS_%[1]v_SERVICE_HOST} -p ${RFS_%[1]v_SERVICE_PORT_SENTINEL} SENTINEL failover mymaster
+  redis-cli %[3]s-h ${RFS_%[1]v_SERVICE_HOST} -p ${RFS_%[1]v_SERVICE_PORT_SENTINEL} SENTINEL failover mymaster
   sleep 31
 fi
-cmd="redis-cli -p %[2]v"
+cmd="redis-cli %[3]s-p %[2]v"
 if [ ! -z "${REDIS_PASSWORD}" ]; then
 	export REDISCLI_AUTH=${REDIS_PASSWORD}
 fi
 save_command="${cmd} save"
-eval $save_command`, rfName, port)
+eval $save_command`, rfName, port, tlsFlags)
 
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -277,6 +430,7 @@ func generateRedisReadinessConfigMap(rf *redisfailoverv1.RedisFailover, labels m
 	name := GetRedisReadinessName(rf)
 	port := rf.Spec.Redis.Port
 	namespace := rf.Namespace
+	tlsFlags := redisCLITLSFlags(rf)
 
 	labels = util.MergeLabels(labels, generateSelectorLabels(redisRoleName, rf.Name))
 	readinessContent := fmt.Sprintf(`ROLE="role"
@@ -285,7 +439,7 @@ ROLE_SLAVE="role:slave"
 IN_SYNC="master_sync_in_progress:1"
 NO_MASTER="master_host:127.0.0.1"
 
-cmd="redis-cli -p %[1]v"
+cmd="redis-cli %[2]s-p %[1]v"
 if [ ! -z "${REDIS_PASSWORD}" ]; then
 	export REDISCLI_AUTH=${REDIS_PASSWORD}
 fi
@@ -318,7 +472,7 @@ case $role in
 		*)
 				echo "unexpected"
 				exit 1
-esac`, port)
+esac`, port, tlsFlags)
 
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -449,7 +603,7 @@ func generateRedisStatefulSet(rf *redisfailoverv1.RedisFailover, labels map[stri
 					Command: []string{
 						"sh",
 						"-c",
-						fmt.Sprintf("redis-cli -h $(hostname) -p %[1]v --user pinger --pass pingpass --no-auth-warning ping | grep PONG", rf.Spec.Redis.Port),
+						fmt.Sprintf("redis-cli %[2]s-h localhost -p %[1]v --user pinger --pass pingpass --no-auth-warning ping | grep PONG", rf.Spec.Redis.Port, redisCLITLSFlags(rf)),
 					},
 				},
 			},
@@ -615,7 +769,7 @@ func generateSentinelDeployment(rf *redisfailoverv1.RedisFailover, labels map[st
 					Command: []string{
 						"sh",
 						"-c",
-						"redis-cli -h $(hostname) -p 26379 ping",
+						fmt.Sprintf("redis-cli %s-h localhost -p 26379 ping", redisCLITLSFlags(rf)),
 					},
 				},
 			},
@@ -633,7 +787,7 @@ func generateSentinelDeployment(rf *redisfailoverv1.RedisFailover, labels map[st
 					Command: []string{
 						"sh",
 						"-c",
-						"redis-cli -h $(hostname) -p 26379 sentinel get-master-addr-by-name mymaster | head -n 1 | grep -vq '127.0.0.1'",
+						fmt.Sprintf("redis-cli %s-h localhost -p 26379 sentinel get-master-addr-by-name mymaster | head -n 1 | grep -vq '127.0.0.1'", redisCLITLSFlags(rf)),
 					},
 				},
 			},
@@ -732,6 +886,11 @@ func createRedisExporterContainer(rf *redisfailoverv1.RedisFailover) corev1.Cont
 	redisEnv := getRedisEnv(rf)
 	container.Env = append(container.Env, redisEnv...)
 
+	if TLSEnabled(rf) {
+		container.VolumeMounts = append(container.VolumeMounts, tlsVolumeMount())
+		container.Env = append(container.Env, redisExporterTLSEnv()...)
+	}
+
 	return container
 }
 
@@ -740,6 +899,12 @@ func createSentinelExporterContainer(rf *redisfailoverv1.RedisFailover) corev1.C
 	if rf.Spec.Sentinel.Exporter.Resources != nil {
 		resources = *rf.Spec.Sentinel.Exporter.Resources
 	}
+
+	addrScheme := "redis"
+	if TLSEnabled(rf) {
+		addrScheme = "rediss"
+	}
+
 	container := corev1.Container{
 		Name:            sentinelExporterContainerName,
 		Image:           rf.Spec.Sentinel.Exporter.Image,
@@ -758,7 +923,7 @@ func createSentinelExporterContainer(rf *redisfailoverv1.RedisFailover) corev1.C
 			Value: fmt.Sprintf("0.0.0.0:%[1]v", sentinelExporterPort),
 		}, corev1.EnvVar{
 			Name:  "REDIS_ADDR",
-			Value: "redis://127.0.0.1:26379",
+			Value: fmt.Sprintf("%s://127.0.0.1:26379", addrScheme),
 		},
 		),
 		Ports: []corev1.ContainerPort{
@@ -771,7 +936,24 @@ func createSentinelExporterContainer(rf *redisfailoverv1.RedisFailover) corev1.C
 		Resources: resources,
 	}
 
+	if TLSEnabled(rf) {
+		container.VolumeMounts = append(container.VolumeMounts, tlsVolumeMount())
+		container.Env = append(container.Env, redisExporterTLSEnv()...)
+	}
+
 	return container
+}
+
+// redisExporterTLSEnv returns the env vars that point oliver006/redis_exporter
+// at the mounted certificate. The exporter uses the certificate itself as
+// the client certificate (the same Secret holds the cluster cert/key/CA),
+// which is sufficient for read-only INFO/CONFIG GET queries.
+func redisExporterTLSEnv() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "REDIS_EXPORTER_TLS_CLIENT_CERT_FILE", Value: tlsCertFile},
+		{Name: "REDIS_EXPORTER_TLS_CLIENT_KEY_FILE", Value: tlsKeyFile},
+		{Name: "REDIS_EXPORTER_TLS_CA_CERT_FILE", Value: tlsCAFile},
+	}
 }
 
 func getAffinity(affinity *corev1.Affinity, labels map[string]string) *corev1.Affinity {
@@ -881,6 +1063,10 @@ func getRedisVolumeMounts(rf *redisfailoverv1.RedisFailover) []corev1.VolumeMoun
 		volumeMounts = append(volumeMounts, startupVolumeMount)
 	}
 
+	if TLSEnabled(rf) {
+		volumeMounts = append(volumeMounts, tlsVolumeMount())
+	}
+
 	if rf.Spec.Redis.ExtraVolumeMounts != nil {
 		volumeMounts = append(volumeMounts, rf.Spec.Redis.ExtraVolumeMounts...)
 	}
@@ -903,11 +1089,33 @@ func getSentinelVolumeMounts(rf *redisfailoverv1.RedisFailover) []corev1.VolumeM
 		}
 		volumeMounts = append(volumeMounts, startupVolumeMount)
 	}
+	if TLSEnabled(rf) {
+		volumeMounts = append(volumeMounts, tlsVolumeMount())
+	}
 	if rf.Spec.Sentinel.ExtraVolumeMounts != nil {
 		volumeMounts = append(volumeMounts, rf.Spec.Sentinel.ExtraVolumeMounts...)
 	}
 
 	return volumeMounts
+}
+
+func tlsVolumeMount() corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      tlsVolumeName,
+		MountPath: tlsMountPath,
+		ReadOnly:  true,
+	}
+}
+
+func tlsVolume(secretName string) corev1.Volume {
+	return corev1.Volume{
+		Name: tlsVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: secretName,
+			},
+		},
+	}
 }
 
 func getRedisVolumes(rf *redisfailoverv1.RedisFailover) []corev1.Volume {
@@ -967,6 +1175,10 @@ func getRedisVolumes(rf *redisfailoverv1.RedisFailover) []corev1.Volume {
 		volumes = append(volumes, startupVolume)
 	}
 
+	if TLSEnabled(rf) {
+		volumes = append(volumes, tlsVolume(GetTLSSecretName(rf)))
+	}
+
 	if rf.Spec.Redis.ExtraVolumes != nil {
 		volumes = append(volumes, rf.Spec.Redis.ExtraVolumes...)
 	}
@@ -1015,6 +1227,10 @@ func getSentinelVolumes(rf *redisfailoverv1.RedisFailover, configMapName string)
 			},
 		}
 		volumes = append(volumes, startupVolume)
+	}
+
+	if TLSEnabled(rf) {
+		volumes = append(volumes, tlsVolume(GetTLSSecretName(rf)))
 	}
 
 	if rf.Spec.Sentinel.ExtraVolumes != nil {
@@ -1120,9 +1336,13 @@ func getContainersWithRedisEnv(cs []corev1.Container, e []corev1.EnvVar) []corev
 func getRedisEnv(rf *redisfailoverv1.RedisFailover) []corev1.EnvVar {
 	var env []corev1.EnvVar
 
+	scheme := "redis"
+	if TLSEnabled(rf) {
+		scheme = "rediss"
+	}
 	env = append(env, corev1.EnvVar{
 		Name:  "REDIS_ADDR",
-		Value: fmt.Sprintf("redis://127.0.0.1:%[1]v", rf.Spec.Redis.Port),
+		Value: fmt.Sprintf("%s://127.0.0.1:%[2]v", scheme, rf.Spec.Redis.Port),
 	})
 
 	env = append(env, corev1.EnvVar{

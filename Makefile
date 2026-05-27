@@ -40,7 +40,7 @@ endif
 
 
 PROJECT_PACKAGE := github.com/spotahome/redis-operator
-CODEGEN_IMAGE := ghcr.io/slok/kube-code-generator:v1.27.0
+CODEGEN_IMAGE := ghcr.io/slok/kube-code-generator:v0.9.0
 PORT := 9710
 
 # CMDs
@@ -69,7 +69,7 @@ docker-build: deps-development
 		--build-arg uid=$(UID) \
 		-t $(REPOSITORY)-dev:latest \
 		-t $(REPOSITORY)-dev:$(COMMIT) \
-		-f $(DEV_DIR)/Dockerfile \
+		-f $(DEV_DIR)/Containerfile \
 		.
 
 # Run a shell into the development docker image
@@ -95,7 +95,7 @@ image: deps-development
 	-t $(REPOSITORY):latest \
 	-t $(REPOSITORY):$(COMMIT) \
 	-t $(REPOSITORY):$(BRANCH) \
-	-f $(APP_DIR)/Dockerfile \
+	-f $(APP_DIR)/Containerfile \
 	.
 
 .PHONY: image-release
@@ -107,7 +107,7 @@ image-release:
 	-t $(REPOSITORY):latest \
 	-t $(REPOSITORY):$(COMMIT) \
 	-t $(REPOSITORY):$(TAG) \
-	-f $(APP_DIR)/Dockerfile \
+	-f $(APP_DIR)/Containerfile \
 	.
 
 .PHONY: testing
@@ -180,24 +180,33 @@ ifndef DOCKER
 	@exit 1
 endif
 
-# Generate kubernetes code for types..
+# Generate Kubernetes deepcopy and client code.
+#
+# slok/kube-code-generator v0.x rewrote its CLI: the older update-*.sh entry
+# scripts are gone, replaced by a single Go binary configured with flags.
+# The image ships an older Go toolchain than our go.mod requires, so we
+# set GOTOOLCHAIN=auto to let it download a matching one on demand.
 .PHONY: update-codegen
 update-codegen:
-	@echo ">> Generating code for Kubernetes CRD types..."
-	docker run --rm -it \
-	-v $(PWD):/go/src/$(PROJECT_PACKAGE) \
-	-e PROJECT_PACKAGE=$(PROJECT_PACKAGE) \
-	-e CLIENT_GENERATOR_OUT=$(PROJECT_PACKAGE)/client/k8s \
-	-e APIS_ROOT=$(PROJECT_PACKAGE)/api \
-	-e GROUPS_VERSION="redisfailover:v1" \
-	-e GENERATION_TARGETS="deepcopy,client" \
-	$(CODEGEN_IMAGE)
+	@echo ">> Generating Kubernetes deepcopy and client code..."
+	docker run --rm \
+		--env GOTOOLCHAIN=auto \
+		--volume $(PWD):/go/src/$(PROJECT_PACKAGE) \
+		--workdir /go/src/$(PROJECT_PACKAGE) \
+		$(CODEGEN_IMAGE) \
+		--apis-in=./api \
+		--go-gen-out=./client/k8s
 
+# Generate the CRD manifest from the +kubebuilder markers in ./api.
+.PHONY: generate-crd
 generate-crd:
-	docker run -it --rm \
-	-v $(PWD):/go/src/$(PROJECT_PACKAGE) \
-	-e GO_PROJECT_ROOT=/go/src/$(PROJECT_PACKAGE) \
-	-e CRD_TYPES_PATH=/go/src/$(PROJECT_PACKAGE)/api \
-	-e CRD_OUT_PATH=/go/src/$(PROJECT_PACKAGE)/manifests \
-	$(CODEGEN_IMAGE) update-crd.sh
-	cp -f manifests/databases.spotahome.com_redisfailovers.yaml manifests/kustomize/base
+	@echo ">> Generating CRD manifest..."
+	docker run --rm \
+		--env GOTOOLCHAIN=auto \
+		--volume $(PWD):/go/src/$(PROJECT_PACKAGE) \
+		--workdir /go/src/$(PROJECT_PACKAGE) \
+		$(CODEGEN_IMAGE) \
+		--apis-in=./api \
+		--crd-gen-out=./manifests
+	cp -f manifests/databases.spotahome.com_redisfailovers.yaml manifests/kustomize/base/
+	cp -f manifests/databases.spotahome.com_redisfailovers.yaml charts/redisoperator/crds/

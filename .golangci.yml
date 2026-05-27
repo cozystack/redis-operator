@@ -1,0 +1,36 @@
+version: "2"
+
+run:
+  timeout: 15m
+
+linters:
+  default: standard
+  settings:
+    staticcheck:
+      # golangci-lint v2 ships staticcheck with the full check set enabled,
+      # including the new QF (quick-fix), ST (style), and S1 (simplification)
+      # families plus SA1019 (deprecated API). These flag pre-existing issues
+      # in upstream code that pre-date our fork and are out of scope for the
+      # TLS work. Keep only the SA bug-class checks (minus SA1019) so CI
+      # mirrors the noise level that the previous golangci-lint v1.61
+      # configuration produced.
+      checks:
+        - SA*
+        - -SA1019
+
+  exclusions:
+    rules:
+      # Upstream Redis client uses defer rClient.Close() without checking
+      # the returned error. Pre-existing pattern, not introduced by the
+      # fork — exclude rather than rewrite.
+      - path: service/redis/client\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/spotahome/redis-operator

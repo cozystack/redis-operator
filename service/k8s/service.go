@@ -10,6 +10,7 @@ import (
 
 	"github.com/spotahome/redis-operator/log"
 	"github.com/spotahome/redis-operator/metrics"
+	"github.com/spotahome/redis-operator/operator/redisfailover/util"
 )
 
 // Service the ServiceAccount service that knows how to interact with k8s to manage them
@@ -95,6 +96,12 @@ func (s *ServiceService) CreateOrUpdateService(namespace string, service *corev1
 	// namespace is our spec(https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#concurrency-control-and-consistency),
 	// we will replace the current namespace state.
 	service.ResourceVersion = storedService.ResourceVersion
+	// Preserve labels and annotations that were set on the live Service
+	// by something other than the operator (admission webhooks, service
+	// meshes, cluster operators stamping metadata). Without the merge we
+	// strip everything we did not put there ourselves on every update.
+	service.SetLabels(util.MergeLabels(storedService.GetLabels(), service.GetLabels()))
+	service.SetAnnotations(util.MergeAnnotations(storedService.GetAnnotations(), service.GetAnnotations()))
 	return s.UpdateService(namespace, service)
 }
 

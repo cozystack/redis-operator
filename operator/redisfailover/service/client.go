@@ -25,6 +25,7 @@ type RedisFailoverClient interface {
 	EnsureRedisReadinessConfigMap(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 	EnsureRedisConfigMap(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 	EnsureNotPresentRedisService(rFailover *redisfailoverv1.RedisFailover) error
+	EnsureRedisCertificate(rFailover *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error
 }
 
 // RedisFailoverKubeClient implements the required methods to talk with kubernetes
@@ -32,14 +33,26 @@ type RedisFailoverKubeClient struct {
 	K8SService    k8s.Services
 	logger        log.Logger
 	metricsClient metrics.Recorder
+	// clusterDomain is the cluster's DNS suffix (e.g. "cluster.local",
+	// "cozy.local") used to template the FQDN SANs on the cert-manager
+	// Certificate. Empty falls back to "cluster.local" so existing
+	// deployments that never set --cluster-domain keep working.
+	clusterDomain string
 }
 
-// NewRedisFailoverKubeClient creates a new RedisFailoverKubeClient
-func NewRedisFailoverKubeClient(k8sService k8s.Services, logger log.Logger, metricsClient metrics.Recorder) *RedisFailoverKubeClient {
+// NewRedisFailoverKubeClient creates a new RedisFailoverKubeClient.
+// clusterDomain controls the *.svc.<domain> SAN entries on the
+// generated cert-manager Certificate; pass an empty string to fall
+// back to the upstream Kubernetes default ("cluster.local").
+func NewRedisFailoverKubeClient(k8sService k8s.Services, logger log.Logger, metricsClient metrics.Recorder, clusterDomain string) *RedisFailoverKubeClient {
+	if clusterDomain == "" {
+		clusterDomain = "cluster.local"
+	}
 	return &RedisFailoverKubeClient{
 		K8SService:    k8sService,
 		logger:        logger,
 		metricsClient: metricsClient,
+		clusterDomain: clusterDomain,
 	}
 }
 
@@ -146,6 +159,19 @@ func (r *RedisFailoverKubeClient) EnsureRedisReadinessConfigMap(rf *redisfailove
 	cm := generateRedisReadinessConfigMap(rf, labels, ownerRefs)
 	err := r.K8SService.CreateOrUpdateConfigMap(rf.Namespace, cm)
 	r.setEnsureOperationMetrics(cm.Namespace, cm.Name, "ConfigMap", rf.Name, err)
+	return err
+}
+
+// EnsureRedisCertificate ensures the cert-manager Certificate resource
+// exists when spec.tls.certManager is configured. It is a no-op for any
+// other TLS mode (disabled, or bring-your-own-secret).
+func (r *RedisFailoverKubeClient) EnsureRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference) error {
+	if !TLSEnabled(rf) || rf.Spec.TLS.CertManager == nil {
+		return nil
+	}
+	cert := generateRedisCertificate(rf, labels, ownerRefs, r.clusterDomain)
+	err := r.K8SService.CreateOrUpdateCertificate(rf.Namespace, cert)
+	r.setEnsureOperationMetrics(cert.Namespace, cert.Name, "Certificate", rf.Name, err)
 	return err
 }
 
