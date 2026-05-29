@@ -149,6 +149,26 @@ func generateRedisCertificate(rf *redisfailoverv1.RedisFailover, labels map[stri
 	return cert
 }
 
+// generateRedisCACertSecret builds the Opaque Secret that holds only the CA
+// certificate (ca.crt). It deliberately carries no tls.key, so RBAC can be
+// scoped to this Secret alone, letting clients verify the Redis server without
+// ever gaining access to a private key. caPEM is the ca.crt bytes read from the
+// cluster's TLS secret.
+func generateRedisCACertSecret(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference, caPEM []byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            GetTLSCACertSecretName(rf),
+			Namespace:       rf.Namespace,
+			Labels:          labels,
+			OwnerReferences: ownerRefs,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			tlsSecretCAKey: caPEM,
+		},
+	}
+}
+
 // redisCertificateSANs returns the DNS and IP SANs the Certificate
 // must cover. Each Service appears in three forms (short, namespaced,
 // FQDN) so the same certificate validates regardless of how callers

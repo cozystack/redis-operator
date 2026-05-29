@@ -120,6 +120,7 @@ func TestEnsure(t *testing.T) {
 			mrfs.On("EnsureRedisMasterService", rf, mock.Anything, mock.Anything).Once().Return(nil)
 			mrfs.On("EnsureRedisSlaveService", rf, mock.Anything, mock.Anything).Once().Return(nil)
 			mrfs.On("EnsureRedisCertificate", rf, mock.Anything, mock.Anything).Once().Return(nil)
+			mrfs.On("EnsureRedisCACertSecret", rf, mock.Anything, mock.Anything).Once().Return(nil)
 			mrfs.On("EnsureRedisConfigMap", rf, mock.Anything, mock.Anything).Once().Return(nil)
 			mrfs.On("EnsureRedisShutdownConfigMap", rf, mock.Anything, mock.Anything).Once().Return(nil)
 			mrfs.On("EnsureRedisReadinessConfigMap", rf, mock.Anything, mock.Anything).Once().Return(nil)
