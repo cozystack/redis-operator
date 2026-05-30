@@ -90,14 +90,29 @@ func NewRedisFailoverRetriever(cfg Config, cli k8s.Services) controller.Retrieve
 		},
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 			watcher, err := cli.WatchRedisFailovers(context.Background(), "", options)
-			watcher = watch.Filter(watcher, func(event watch.Event) (watch.Event, bool) {
+			if err != nil {
+				// Do not wrap a nil watcher: watch.Filter starts a goroutine
+				// that dereferences the source watcher's ResultChan, so passing
+				// the nil returned alongside an error panics the operator. The
+				// reflector retries the watch on a returned error instead.
+				return nil, err
+			}
+			return watch.Filter(watcher, func(event watch.Event) (watch.Event, bool) {
+				// Always propagate watch.Error events. Their Object is a
+				// *metav1.Status, not a *RedisFailover, so they would otherwise
+				// be dropped by the type assertion below. The reflector relies
+				// on these events to learn the watch has failed (e.g. an expired
+				// resource version) and to restart it promptly instead of
+				// waiting for a connection timeout.
+				if event.Type == watch.Error {
+					return event, true
+				}
 				rf, ok := event.Object.(*redisfailoverv1.RedisFailover)
 				if !ok {
 					return event, false
 				}
 				return event, isNamespaceSupported(*rf)
-			})
-			return watcher, err
+			}), nil
 		},
 	})
 }
