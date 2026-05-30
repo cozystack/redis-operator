@@ -98,6 +98,15 @@ func NewRedisFailoverRetriever(cfg Config, cli k8s.Services) controller.Retrieve
 				return nil, err
 			}
 			return watch.Filter(watcher, func(event watch.Event) (watch.Event, bool) {
+				// Always propagate watch.Error events. Their Object is a
+				// *metav1.Status, not a *RedisFailover, so they would otherwise
+				// be dropped by the type assertion below. The reflector relies
+				// on these events to learn the watch has failed (e.g. an expired
+				// resource version) and to restart it promptly instead of
+				// waiting for a connection timeout.
+				if event.Type == watch.Error {
+					return event, true
+				}
 				rf, ok := event.Object.(*redisfailoverv1.RedisFailover)
 				if !ok {
 					return event, false
