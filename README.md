@@ -1,3 +1,20 @@
+> [!IMPORTANT]
+> **This fork is unused and archived.**
+>
+> Nothing in the Cozystack distribution builds from this repository: the operator image is
+> built in the [cozystack](https://github.com/cozystack/cozystack) monorepo, from upstream
+> release tarballs.
+>
+> Upstream [spotahome/redis-operator](https://github.com/spotahome/redis-operator) was archived
+> on 2026-06-11, its last release being v1.2.4 from 2022. Cozystack is moving to the actively
+> maintained [freshworks-oss/redis-operator](https://github.com/freshworks-oss/redis-operator)
+> fork, which keeps the same `RedisFailover` CRD and API group — see
+> [cozystack/cozystack#3406](https://github.com/cozystack/cozystack/pull/3406).
+>
+> The content below is the upstream README as it stood when this fork was taken.
+
+---
+
 # redis-operator
 
 [![Build Status](https://github.com/spotahome/redis-operator/actions/workflows/ci.yaml/badge.svg?branch=master)](https://github.com/spotahome/redis-operator)
